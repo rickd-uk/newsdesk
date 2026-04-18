@@ -26,6 +26,9 @@ func main() {
 	if err := db.InitFTS(); err != nil {
 		log.Fatalf("init fts: %v", err)
 	}
+	if err := db.InitReadTable(); err != nil {
+		log.Fatalf("init read table: %v", err)
+	}
 
 	tmpl, err := mustParseTemplatesFS(embeddedFiles)
 	if err != nil {
@@ -37,7 +40,7 @@ func main() {
 	staticFS, _ := fs.Sub(embeddedFiles, "static")
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	http.HandleFunc("/articles", srv.handleArticles)
-	http.HandleFunc("/article/", srv.handleArticle)
+	http.HandleFunc("/article/", srv.handleArticleDispatch)
 	http.HandleFunc("/", srv.handleIndex)
 
 	fmt.Printf("article-viewer listening on %s\n", *addr)

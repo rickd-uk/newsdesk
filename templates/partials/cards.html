@@ -1,6 +1,11 @@
 {{define "cards"}}
+<div id="result-count" class="result-count" hx-swap-oob="true">
+    {{if eq .TotalCount 0}}No articles found{{else}}{{fmtCount .TotalCount}} article{{if ne .TotalCount 1}}s{{end}}{{end}}
+</div>
 {{range .Articles}}
-<div class="card"
+<div class="card{{if .Read}} read{{end}}"
+     id="card-{{.ID}}"
+     data-id="{{.ID}}"
      hx-get="/article/{{.ID}}"
      hx-target="#modal-container"
      hx-swap="innerHTML">
@@ -16,7 +21,7 @@
 {{end}}
 {{if .HasMore}}
 <div class="scroll-sentinel"
-     hx-get="{{buildQuery .Q .Site .Category .NextOffset}}"
+     hx-get="{{buildQuery .}}"
      hx-trigger="intersect once"
      hx-swap="outerHTML"
      hx-target="this"></div>

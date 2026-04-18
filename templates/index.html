@@ -11,6 +11,10 @@
 <body>
     <header id="top-bar">
         <div class="top-inner">
+            <button id="filter-btn" class="filter-btn" type="button" onclick="toggleFilters()" title="Filters">
+                &#9776;
+                <span id="filter-badge" class="filter-badge" hidden></span>
+            </button>
             <input
                 type="search"
                 id="search-input"
@@ -22,32 +26,112 @@
                 hx-trigger="keyup changed delay:300ms, search"
                 hx-target="#feed"
                 hx-swap="innerHTML"
-                hx-include="#site-filter,#cat-filter"
+                hx-include="#filter-panel [name]"
             >
-            <input type="hidden" id="site-filter" name="site" value="{{.SelectedSite}}">
-            <input type="hidden" id="cat-filter"  name="category" value="{{.SelectedCat}}">
+            <button type="button" class="clear-btn" onclick="clearInput('search-input')" title="Clear search">&#x2715;</button>
+            <button id="view-btn" class="filter-btn" type="button" onclick="toggleCompact()" title="Toggle compact view">&#9783;</button>
         </div>
-        <div class="pills-row">
-            <div class="pills" id="site-pills">
-                {{range .Sites}}
-                <button type="button"
-                        class="pill{{if eq $.SelectedSite .}} active{{end}}"
-                        data-value="{{.}}"
-                        onclick="togglePill(this,'site-filter')">{{.}}</button>
-                {{end}}
+
+        <div id="filter-panel">
+            <input type="hidden" id="site-filter" name="site" value="{{.SelectedSite}}">
+            <input type="hidden" id="cat-filter" name="category" value="{{.SelectedCat}}">
+
+            <div class="filter-section">
+                <div class="filter-section-label">Site</div>
+                <div class="pills" id="site-pills">
+                    {{range .Sites}}
+                    <button type="button"
+                            class="pill{{if eq $.SelectedSite .}} active{{end}}"
+                            data-value="{{.}}"
+                            onclick="togglePill(this,'site-filter')">{{.}}</button>
+                    {{end}}
+                </div>
             </div>
-            <div class="pills pills-cats" id="cat-pills">
-                {{range .Categories}}
-                <button type="button"
-                        class="pill{{if eq $.SelectedCat .}} active{{end}}"
-                        data-value="{{.}}"
-                        onclick="togglePill(this,'cat-filter')">{{.}}</button>
-                {{end}}
+
+            <div class="filter-section">
+                <div class="filter-section-label">Category</div>
+                <div id="cat-pills">
+                    {{range .CategoryGroups}}
+                    <div class="cat-group">
+                        <span class="cat-group-label">{{.Label}}:</span>
+                        {{range .Pills}}
+                        <button type="button"
+                                class="pill pill-cat{{if eq $.SelectedCat .Value}} active{{end}}"
+                                data-value="{{.Value}}"
+                                data-sites="{{.Sites}}"
+                                onclick="togglePill(this,'cat-filter')">{{.Label}}</button>
+                        {{end}}
+                        {{range .SubGroups}}
+                        <div class="cat-subgroup">
+                            <span class="cat-subgroup-label">{{.Label}}:</span>
+                            {{range .Pills}}
+                            <button type="button"
+                                    class="pill pill-cat{{if eq $.SelectedCat .Value}} active{{end}}"
+                                    data-value="{{.Value}}"
+                                    data-sites="{{.Sites}}"
+                                    onclick="togglePill(this,'cat-filter')">{{.Label}}</button>
+                            {{end}}
+                        </div>
+                        {{end}}
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+
+            <div class="filter-section filter-inline">
+                <div class="filter-inline-group">
+                    <div class="filter-section-label">Search in</div>
+                    <div class="filter-row">
+                        <label class="check-label">
+                            <input type="checkbox" name="fields" value="title" onchange="fireFeedRefresh()"{{if .SearchTitle}} checked{{end}}> Title
+                        </label>
+                        <label class="check-label">
+                            <input type="checkbox" name="fields" value="body" onchange="fireFeedRefresh()"{{if .SearchBody}} checked{{end}}> Content
+                        </label>
+                        <label class="check-label">
+                            <input type="checkbox" name="fields" value="tags" onchange="fireFeedRefresh()"{{if .SearchTags}} checked{{end}}> Tags
+                        </label>
+                    </div>
+                </div>
+                <div class="filter-inline-group">
+                    <div class="filter-section-label">Read</div>
+                    <div class="filter-row">
+                        <label class="check-label">
+                            <input type="checkbox" name="show_read" value="1" onchange="fireFeedRefresh()"{{if .ShowRead}} checked{{end}}> Show read
+                        </label>
+                    </div>
+                </div>
+                <div class="filter-inline-group">
+                    <div class="filter-section-label">Author</div>
+                    <div class="filter-row">
+                        <input type="text" id="author-input" name="author" class="filter-text-input"
+                               value="{{.Author}}" placeholder="Filter by author&#x2026;"
+                               oninput="debounceRefresh()">
+                        <button type="button" class="clear-btn" onclick="clearInput('author-input')" title="Clear author">&#x2715;</button>
+                    </div>
+                </div>
+                <div class="filter-inline-group">
+                    <div class="filter-section-label">Date range</div>
+                    <div id="date-range-row" class="filter-row{{if or .DateFrom .DateTo}} active{{end}}">
+                        <button type="button" class="date-all-pill" onclick="activateDateRange()">All dates</button>
+                        <div class="date-inputs">
+                            <input type="date" id="date-from" name="date_from" class="filter-text-input filter-date"
+                                   value="{{.DateFrom}}" onchange="fireFeedRefresh()">
+                            <span class="date-sep">–</span>
+                            <input type="date" id="date-to" name="date_to" class="filter-text-input filter-date"
+                                   value="{{.DateTo}}" onchange="fireFeedRefresh()">
+                            <button type="button" class="clear-btn" onclick="clearDates()" title="All dates">&#x2715;</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
 
     <main>
+        <div id="result-count" class="result-count">
+            {{if eq .Cards.TotalCount 0}}No articles found{{else}}{{fmtCount .Cards.TotalCount}} article{{if ne .Cards.TotalCount 1}}s{{end}}{{end}}
+        </div>
         <div id="feed">
             {{template "cards" .Cards}}
         </div>

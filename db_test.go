@@ -31,6 +31,9 @@ func testDB(t *testing.T) *DB {
 	if err := db.InitFTS(); err != nil {
 		t.Fatalf("InitFTS: %v", err)
 	}
+	if err := db.InitReadTable(); err != nil {
+		t.Fatalf("InitReadTable: %v", err)
+	}
 	return db
 }
 
@@ -46,12 +49,12 @@ func TestGetSites(t *testing.T) {
 	}
 }
 
-func TestGetCategories(t *testing.T) {
+func TestGetCategoryInfos(t *testing.T) {
 	db := testDB(t)
 	defer db.Close()
-	cats, err := db.GetCategories()
+	cats, err := db.GetCategoryInfos()
 	if err != nil {
-		t.Fatalf("GetCategories: %v", err)
+		t.Fatalf("GetCategoryInfos: %v", err)
 	}
 	if len(cats) != 3 {
 		t.Fatalf("want 3 categories, got %d: %v", len(cats), cats)

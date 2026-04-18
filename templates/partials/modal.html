@@ -1,5 +1,5 @@
 {{define "modal"}}
-<div class="modal">
+<div class="modal" data-article-id="{{.ID}}">
     <div class="modal-header">
         <div class="modal-title-group">
             <h2 class="modal-title">{{.Title}}</h2>
@@ -24,6 +24,7 @@
             <button class="size-btn" onclick="adjustSize(1)">A+</button>
         </div>
         <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
+        <button class="unread-btn" id="unread-btn" onclick="markUnread()">Unread</button>
         {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>{{end}}
     </div>
     <div class="modal-body" id="article-content">

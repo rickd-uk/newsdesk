@@ -1,0 +1,14 @@
+[Unit]
+Description=Newsdesk Article Viewer
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/newsdesk
+ExecStart=/opt/newsdesk/news-desk -db /opt/newsdesk/articles.db -addr 127.0.0.1:8181
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

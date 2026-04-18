@@ -18,21 +18,54 @@ type Server struct {
 }
 
 type PageData struct {
-	Sites        []string
-	Categories   []string
+	Sites           []string
+	CategoryGroups  []CategoryGroup
 	Q            string
+	Author       string
+	DateFrom     string
+	DateTo       string
+	SearchTitle  bool
+	SearchBody   bool
+	SearchTags   bool
 	SelectedSite string
 	SelectedCat  string
+	ShowRead     bool
 	Cards        CardsData
 }
 
 type CardsData struct {
 	Articles   []Article
+	TotalCount int
 	Q          string
+	Author     string
+	DateFrom   string
+	DateTo     string
+	Fields     []string
 	Site       string
 	Category   string
+	ShowRead   bool
 	NextOffset int
 	HasMore    bool
+}
+
+func parseFields(r *http.Request) []string {
+	f := r.URL.Query()["fields"]
+	if len(f) == 0 {
+		return nil // nil = all columns
+	}
+	return f
+}
+
+func hasField(fields []string, name string) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for _, f := range fields {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }
 
 func buildFuncMap() template.FuncMap {
@@ -72,18 +105,40 @@ func buildFuncMap() template.FuncMap {
 			}
 			return out
 		},
-		"buildQuery": func(q, site, category string, offset int) template.URL {
+		"fmtCount": func(n int) string {
+			s := strconv.Itoa(n)
+			for i := len(s) - 3; i > 0; i -= 3 {
+				s = s[:i] + "," + s[i:]
+			}
+			return s
+		},
+		"buildQuery": func(d CardsData) template.URL {
 			params := url.Values{}
-			if q != "" {
-				params.Set("q", q)
+			if d.Q != "" {
+				params.Set("q", d.Q)
 			}
-			if site != "" {
-				params.Set("site", site)
+			if d.Site != "" {
+				params.Set("site", d.Site)
 			}
-			if category != "" {
-				params.Set("category", category)
+			if d.Category != "" {
+				params.Set("category", d.Category)
 			}
-			params.Set("offset", strconv.Itoa(offset))
+			if d.Author != "" {
+				params.Set("author", d.Author)
+			}
+			if d.DateFrom != "" {
+				params.Set("date_from", d.DateFrom)
+			}
+			if d.DateTo != "" {
+				params.Set("date_to", d.DateTo)
+			}
+			for _, f := range d.Fields {
+				params.Add("fields", f)
+			}
+			if d.ShowRead {
+				params.Set("show_read", "1")
+			}
+			params.Set("offset", strconv.Itoa(d.NextOffset))
 			return template.URL("/articles?" + params.Encode())
 		},
 	}
@@ -117,24 +172,49 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	site := r.URL.Query().Get("site")
 	cat := r.URL.Query().Get("category")
+	author := r.URL.Query().Get("author")
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+	fields := parseFields(r)
+	showRead := r.URL.Query().Get("show_read") == "1"
 
+	qp := QueryParams{
+		Q: q, Site: site, Category: cat,
+		Author: author, DateFrom: dateFrom, DateTo: dateTo,
+		Fields: fields, HideRead: !showRead,
+	}
 	sites, _ := s.db.GetSites()
-	cats, _ := s.db.GetCategories()
-	articles, _ := s.db.QueryArticles(QueryParams{
-		Q: q, Site: site, Category: cat, Offset: 0, Limit: pageSize,
-	})
+	catInfos, _ := s.db.GetCategoryInfos()
+	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: 0,
+		Q: qp.Q, Site: qp.Site, Category: qp.Category,
+		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
+		Fields: qp.Fields, HideRead: qp.HideRead})
+	total, _ := s.db.CountArticles(qp)
 
 	data := PageData{
-		Sites:        sites,
-		Categories:   cats,
+		Sites:          sites,
+		CategoryGroups: BuildCategoryTree(catInfos),
 		Q:            q,
+		Author:       author,
+		DateFrom:     dateFrom,
+		DateTo:       dateTo,
+		SearchTitle:  hasField(fields, "title"),
+		SearchBody:   hasField(fields, "body"),
+		SearchTags:   hasField(fields, "tags"),
 		SelectedSite: site,
 		SelectedCat:  cat,
+		ShowRead:     showRead,
 		Cards: CardsData{
 			Articles:   articles,
+			TotalCount: total,
 			Q:          q,
+			Author:     author,
+			DateFrom:   dateFrom,
+			DateTo:     dateTo,
+			Fields:     fields,
 			Site:       site,
 			Category:   cat,
+			ShowRead:   showRead,
 			NextOffset: pageSize,
 			HasMore:    len(articles) == pageSize,
 		},
@@ -148,13 +228,22 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	site := r.URL.Query().Get("site")
 	cat := r.URL.Query().Get("category")
+	author := r.URL.Query().Get("author")
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+	fields := parseFields(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	showRead := r.URL.Query().Get("show_read") == "1"
 
-	articles, _ := s.db.QueryArticles(QueryParams{
-		Q: q, Site: site, Category: cat, Offset: offset, Limit: pageSize,
-	})
+	qp := QueryParams{Q: q, Site: site, Category: cat,
+		Author: author, DateFrom: dateFrom, DateTo: dateTo,
+		Fields: fields, HideRead: !showRead}
+	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: offset,
+		Q: qp.Q, Site: qp.Site, Category: qp.Category,
+		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
+		Fields: qp.Fields, HideRead: qp.HideRead})
+	total, _ := s.db.CountArticles(qp)
 
-	// Push URL so browser history reflects current filters (offset=0 only)
 	if offset == 0 {
 		params := url.Values{}
 		if q != "" {
@@ -166,6 +255,21 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		if cat != "" {
 			params.Set("category", cat)
 		}
+		if author != "" {
+			params.Set("author", author)
+		}
+		if dateFrom != "" {
+			params.Set("date_from", dateFrom)
+		}
+		if dateTo != "" {
+			params.Set("date_to", dateTo)
+		}
+		for _, f := range fields {
+			params.Add("fields", f)
+		}
+		if showRead {
+			params.Set("show_read", "1")
+		}
 		pushURL := "/"
 		if len(params) > 0 {
 			pushURL += "?" + params.Encode()
@@ -175,14 +279,32 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 
 	data := CardsData{
 		Articles:   articles,
+		TotalCount: total,
 		Q:          q,
+		Author:     author,
+		DateFrom:   dateFrom,
+		DateTo:     dateTo,
+		Fields:     fields,
 		Site:       site,
 		Category:   cat,
+		ShowRead:   showRead,
 		NextOffset: offset + pageSize,
 		HasMore:    len(articles) == pageSize,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "cards", data); err != nil {
 		log.Printf("execute cards: %v", err)
+	}
+}
+
+func (s *Server) handleArticleDispatch(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/read"):
+		s.handleMarkRead(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/unread"):
+		s.handleMarkUnread(w, r)
+	default:
+		s.handleArticle(w, r)
 	}
 }
 
@@ -201,4 +323,26 @@ func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
 	if err := s.tmpl.ExecuteTemplate(w, "modal", article); err != nil {
 		log.Printf("execute modal: %v", err)
 	}
+}
+
+func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/read")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	s.db.MarkRead(id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleMarkUnread(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/unread")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	s.db.MarkUnread(id)
+	w.WriteHeader(http.StatusNoContent)
 }
