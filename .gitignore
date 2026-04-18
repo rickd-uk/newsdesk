@@ -1,0 +1,6 @@
+articles.db
+user_data/
+*.db-shm
+*.db-wal
+article-viewer
+.superpowers/
