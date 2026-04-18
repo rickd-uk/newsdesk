@@ -1,0 +1,14 @@
+[Unit]
+Description=Article Viewer
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/article-viewer
+ExecStart=/opt/article-viewer/article-viewer -db /path/to/articles.db -addr 127.0.0.1:8181
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
