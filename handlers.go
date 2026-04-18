@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"html/template"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -94,9 +95,11 @@ func mustParseTemplates() *template.Template {
 	if err != nil {
 		panic("parse templates: " + err.Error())
 	}
-	// partials may not exist yet during early task execution
-	if _, err2 := tmpl.ParseGlob("templates/partials/*.html"); err2 == nil {
-		// parsed successfully — nothing to do
+	// partials directory may not exist yet during early tasks — tolerate absence only
+	if _, err2 := tmpl.ParseGlob("templates/partials/*.html"); err2 != nil {
+		if !strings.Contains(err2.Error(), "pattern matches no files") {
+			panic("parse partials: " + err2.Error())
+		}
 	}
 	return tmpl
 }
@@ -136,7 +139,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			HasMore:    len(articles) == pageSize,
 		},
 	}
-	s.tmpl.ExecuteTemplate(w, "index.html", data)
+	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
+		log.Printf("execute index.html: %v", err)
+	}
 }
 
 func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +181,9 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		NextOffset: offset + pageSize,
 		HasMore:    len(articles) == pageSize,
 	}
-	s.tmpl.ExecuteTemplate(w, "cards", data)
+	if err := s.tmpl.ExecuteTemplate(w, "cards", data); err != nil {
+		log.Printf("execute cards: %v", err)
+	}
 }
 
 func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
@@ -191,5 +198,7 @@ func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.tmpl.ExecuteTemplate(w, "modal", article)
+	if err := s.tmpl.ExecuteTemplate(w, "modal", article); err != nil {
+		log.Printf("execute modal: %v", err)
+	}
 }
