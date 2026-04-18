@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -39,10 +40,14 @@ func OpenDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	db.Exec("PRAGMA journal_mode=WAL;")
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		log.Printf("warn: WAL mode not set: %v", err)
+	}
 	return &DB{db}, nil
 }
 
+// InitFTS creates a standalone FTS5 index populated once at startup.
+// New articles inserted after startup are not searchable until restart.
 func (db *DB) InitFTS() error {
 	_, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
 		USING fts5(title, body, tags)`)
@@ -50,7 +55,9 @@ func (db *DB) InitFTS() error {
 		return fmt.Errorf("create fts table: %w", err)
 	}
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM articles_fts").Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM articles_fts").Scan(&count); err != nil {
+		return fmt.Errorf("check fts count: %w", err)
+	}
 	if count == 0 {
 		_, err = db.Exec(`INSERT INTO articles_fts(rowid, title, body, tags)
 			SELECT id, COALESCE(title,''), COALESCE(content,''), COALESCE(tags,'')
@@ -72,7 +79,9 @@ func (db *DB) GetSites() ([]string, error) {
 	var out []string
 	for rows.Next() {
 		var s string
-		rows.Scan(&s)
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
 		out = append(out, s)
 	}
 	return out, nil
@@ -88,19 +97,25 @@ func (db *DB) GetCategories() ([]string, error) {
 	var out []string
 	for rows.Next() {
 		var c string
-		rows.Scan(&c)
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	return out, nil
 }
 
 func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
+	if p.Limit <= 0 {
+		p.Limit = 20
+	}
 	var (
 		rows *sql.Rows
 		err  error
 	)
 
-	if p.Q != "" {
+	searchQ := strings.TrimSpace(p.Q)
+	if searchQ != "" {
 		q := `SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
 			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
@@ -108,7 +123,7 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			FROM articles_fts f
 			JOIN articles a ON a.id = f.rowid
 			WHERE articles_fts MATCH ?`
-		args := []interface{}{strings.TrimSpace(p.Q) + "*"}
+		args := []interface{}{searchQ + "*"}
 		if p.Site != "" {
 			q += " AND a.site = ?"
 			args = append(args, p.Site)

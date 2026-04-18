@@ -130,3 +130,18 @@ func TestGetArticleByID_NotFound(t *testing.T) {
 		t.Fatal("want error for missing ID, got nil")
 	}
 }
+
+func TestQueryArticles_CombinedFilter(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	arts, err := db.QueryArticles(QueryParams{Site: "Japan Times", Category: "tech", Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles combined: %v", err)
+	}
+	if len(arts) != 1 {
+		t.Fatalf("want 1 article for Japan Times+tech, got %d", len(arts))
+	}
+	if arts[0].Title != "Article One" {
+		t.Fatalf("want 'Article One', got %q", arts[0].Title)
+	}
+}
