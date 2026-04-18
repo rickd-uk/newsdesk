@@ -1,1 +1,9 @@
-<!DOCTYPE html><html><body>placeholder</body></html>
+<!DOCTYPE html>
+<html>
+<head><title>Article Viewer</title></head>
+<body>
+<h1>Article Viewer</h1>
+{{range .Sites}}<span class="pill">{{.}}</span>{{end}}
+{{template "cards" .Cards}}
+</body>
+</html>
