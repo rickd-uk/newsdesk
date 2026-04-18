@@ -34,6 +34,9 @@ func testDB(t *testing.T) *DB {
 	if err := db.InitReadTable(); err != nil {
 		t.Fatalf("InitReadTable: %v", err)
 	}
+	if err := db.InitFavoritesTable(); err != nil {
+		t.Fatalf("InitFavoritesTable: %v", err)
+	}
 	return db
 }
 

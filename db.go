@@ -21,19 +21,21 @@ type Article struct {
 	Content     string
 	ScrapedAt   string
 	Read        bool
+	Favorited   bool
 }
 
 type QueryParams struct {
-	Q        string
-	Site     string
-	Category string
-	Author   string
-	DateFrom string
-	DateTo   string
-	Fields   []string // "title","body","tags" — nil/empty means all
-	HideRead bool
-	Offset   int
-	Limit    int
+	Q             string
+	Site          string
+	Category      string
+	Author        string
+	DateFrom      string
+	DateTo        string
+	Fields        []string // "title","body","tags" — nil/empty means all
+	HideRead      bool
+	FavoritesOnly bool
+	Offset        int
+	Limit         int
 }
 
 func buildFTSPrefix(fields []string) string {
@@ -90,6 +92,24 @@ func (db *DB) InitFTS() error {
 		}
 	}
 	return nil
+}
+
+func (db *DB) InitFavoritesTable() error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_favorites (
+		article_id INTEGER PRIMARY KEY,
+		favorited_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	return err
+}
+
+func (db *DB) MarkFavorite(id int) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO article_favorites(article_id) VALUES(?)`, id)
+	return err
+}
+
+func (db *DB) UnmarkFavorite(id int) error {
+	_, err := db.Exec(`DELETE FROM article_favorites WHERE article_id = ?`, id)
+	return err
 }
 
 func (db *DB) InitReadTable() error {
@@ -160,6 +180,7 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 		q := `SELECT COUNT(*) FROM articles_fts f
 		      JOIN articles a ON a.id = f.rowid
 		      LEFT JOIN article_reads r ON a.id = r.article_id
+		      LEFT JOIN article_favorites fav ON a.id = fav.article_id
 		      WHERE articles_fts MATCH ?`
 		args := []interface{}{ftsQ}
 		if p.Site != "" {
@@ -185,10 +206,14 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 		if p.HideRead {
 			q += " AND r.article_id IS NULL"
 		}
+		if p.FavoritesOnly {
+			q += " AND fav.article_id IS NOT NULL"
+		}
 		return count, db.QueryRow(q, args...).Scan(&count)
 	}
 	q := `SELECT COUNT(*) FROM articles a
 	      LEFT JOIN article_reads r ON a.id = r.article_id
+	      LEFT JOIN article_favorites fav ON a.id = fav.article_id
 	      WHERE 1=1`
 	args := []interface{}{}
 	if p.Site != "" {
@@ -213,6 +238,9 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 	}
 	if p.HideRead {
 		q += " AND r.article_id IS NULL"
+	}
+	if p.FavoritesOnly {
+		q += " AND fav.article_id IS NOT NULL"
 	}
 	return count, db.QueryRow(q, args...).Scan(&count)
 }
@@ -312,10 +340,12 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
 			COALESCE(a.scraped_at,''),
-			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END
+			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
+			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 			FROM articles_fts f
 			JOIN articles a ON a.id = f.rowid
 			LEFT JOIN article_reads r ON a.id = r.article_id
+			LEFT JOIN article_favorites fav ON a.id = fav.article_id
 			WHERE articles_fts MATCH ?`
 		args := []interface{}{ftsQ}
 		if p.Site != "" {
@@ -341,6 +371,9 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 		if p.HideRead {
 			q += " AND r.article_id IS NULL"
 		}
+		if p.FavoritesOnly {
+			q += " AND fav.article_id IS NOT NULL"
+		}
 		q += " ORDER BY a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
 		args = append(args, p.Limit, p.Offset)
 		rows, err = db.Query(q, args...)
@@ -349,9 +382,11 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
 			COALESCE(a.scraped_at,''),
-			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END
+			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
+			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 			FROM articles a
 			LEFT JOIN article_reads r ON a.id = r.article_id
+			LEFT JOIN article_favorites fav ON a.id = fav.article_id
 			WHERE 1=1`
 		args := []interface{}{}
 		if p.Site != "" {
@@ -377,6 +412,9 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 		if p.HideRead {
 			q += " AND r.article_id IS NULL"
 		}
+		if p.FavoritesOnly {
+			q += " AND fav.article_id IS NOT NULL"
+		}
 		q += " ORDER BY a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
 		args = append(args, p.Limit, p.Offset)
 		rows, err = db.Query(q, args...)
@@ -390,7 +428,8 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 	for rows.Next() {
 		var a Article
 		if err := rows.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
-			&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt, &a.Read); err != nil {
+			&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
+			&a.Read, &a.Favorited); err != nil {
 			return nil, err
 		}
 		articles = append(articles, a)
@@ -403,13 +442,16 @@ func (db *DB) GetArticleByID(id int) (*Article, error) {
 		COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 		COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
 		COALESCE(a.scraped_at,''),
-		CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END
+		CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
+		CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 		FROM articles a
 		LEFT JOIN article_reads r ON a.id = r.article_id
+		LEFT JOIN article_favorites fav ON a.id = fav.article_id
 		WHERE a.id = ?`, id)
 	var a Article
 	if err := row.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
-		&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt, &a.Read); err != nil {
+		&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
+		&a.Read, &a.Favorited); err != nil {
 		return nil, err
 	}
 	return &a, nil

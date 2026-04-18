@@ -25,6 +25,7 @@
         </div>
         <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
         <button class="unread-btn" id="unread-btn" onclick="markUnread()">Unread</button>
+        <button class="fav-btn{{if .Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()">{{if .Favorited}}★ Saved{{else}}☆ Save{{end}}</button>
         {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>{{end}}
     </div>
     <div class="modal-body" id="article-content">

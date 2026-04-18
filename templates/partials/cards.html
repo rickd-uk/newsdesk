@@ -3,13 +3,14 @@
     {{if eq .TotalCount 0}}No articles found{{else}}{{fmtCount .TotalCount}} article{{if ne .TotalCount 1}}s{{end}}{{end}}
 </div>
 {{range .Articles}}
-<div class="card{{if .Read}} read{{end}}"
+<div class="card{{if .Read}} read{{end}}{{if .Favorited}} favorited{{end}}"
      id="card-{{.ID}}"
      data-id="{{.ID}}"
      hx-get="/article/{{.ID}}"
      hx-target="#modal-container"
      hx-swap="innerHTML">
     <div class="card-meta">
+        {{if .Favorited}}<span class="fav-star">★</span>{{end}}
         {{if .Site}}<span class="site">{{.Site}}</span>{{end}}
         {{if .Category}}<span class="category">{{.Category}}</span>{{end}}
         {{if .PublishDate}}<span class="date">{{.PublishDate}}</span>{{end}}

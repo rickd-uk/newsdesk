@@ -29,6 +29,9 @@ func main() {
 	if err := db.InitReadTable(); err != nil {
 		log.Fatalf("init read table: %v", err)
 	}
+	if err := db.InitFavoritesTable(); err != nil {
+		log.Fatalf("init favorites table: %v", err)
+	}
 
 	tmpl, err := mustParseTemplatesFS(embeddedFiles)
 	if err != nil {

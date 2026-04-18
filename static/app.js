@@ -80,6 +80,38 @@ function markUnread() {
     });
 }
 
+// ── Favorite toggle ──
+
+function toggleFavorite() {
+    const modal = document.querySelector('.modal');
+    const id = modal && modal.dataset.articleId;
+    if (!id) return;
+    const btn = document.getElementById('fav-btn');
+    const card = document.getElementById('card-' + id);
+    const isFav = btn && btn.classList.contains('active');
+    const action = isFav ? 'unfavorite' : 'favorite';
+    fetch('/article/' + id + '/' + action, { method: 'POST' }).then(function() {
+        if (btn) {
+            btn.classList.toggle('active', !isFav);
+            btn.textContent = !isFav ? '★ Saved' : '☆ Save';
+        }
+        if (card) card.classList.toggle('favorited', !isFav);
+        // update star in card meta
+        const meta = card && card.querySelector('.card-meta');
+        if (meta) {
+            const existing = meta.querySelector('.fav-star');
+            if (!isFav && !existing) {
+                const star = document.createElement('span');
+                star.className = 'fav-star';
+                star.textContent = '★';
+                meta.prepend(star);
+            } else if (isFav && existing) {
+                existing.remove();
+            }
+        }
+    });
+}
+
 // ── Copy article content ──
 
 function copyContent() {
