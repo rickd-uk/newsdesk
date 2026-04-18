@@ -32,14 +32,16 @@
                 {{range .Sites}}
                 <button type="button"
                         class="pill{{if eq $.SelectedSite .}} active{{end}}"
-                        onclick="togglePill(this,'site-filter','{{.}}')">{{.}}</button>
+                        data-value="{{.}}"
+                        onclick="togglePill(this,'site-filter')">{{.}}</button>
                 {{end}}
             </div>
             <div class="pills pills-cats" id="cat-pills">
                 {{range .Categories}}
                 <button type="button"
                         class="pill{{if eq $.SelectedCat .}} active{{end}}"
-                        onclick="togglePill(this,'cat-filter','{{.}}')">{{.}}</button>
+                        data-value="{{.}}"
+                        onclick="togglePill(this,'cat-filter')">{{.}}</button>
                 {{end}}
             </div>
         </div>

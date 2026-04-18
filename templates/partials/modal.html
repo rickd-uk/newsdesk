@@ -24,7 +24,7 @@
             <button class="size-btn" onclick="adjustSize(1)">A+</button>
         </div>
         <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
-        <a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>
+        {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>{{end}}
     </div>
     <div class="modal-body" id="article-content">
         {{range splitParagraphs .Content}}

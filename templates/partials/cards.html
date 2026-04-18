@@ -16,7 +16,7 @@
 {{end}}
 {{if .HasMore}}
 <div class="scroll-sentinel"
-     hx-get="/articles?{{buildQuery .Q .Site .Category .NextOffset}}"
+     hx-get="{{buildQuery .Q .Site .Category .NextOffset}}"
      hx-trigger="intersect once"
      hx-swap="outerHTML"
      hx-target="this"></div>

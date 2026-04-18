@@ -72,7 +72,7 @@ func buildFuncMap() template.FuncMap {
 			}
 			return out
 		},
-		"buildQuery": func(q, site, category string, offset int) string {
+		"buildQuery": func(q, site, category string, offset int) template.URL {
 			params := url.Values{}
 			if q != "" {
 				params.Set("q", q)
@@ -84,7 +84,7 @@ func buildFuncMap() template.FuncMap {
 				params.Set("category", category)
 			}
 			params.Set("offset", strconv.Itoa(offset))
-			return params.Encode()
+			return template.URL("/articles?" + params.Encode())
 		},
 	}
 }
