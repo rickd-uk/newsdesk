@@ -1,9 +1,58 @@
 <!DOCTYPE html>
-<html>
-<head><title>Article Viewer</title></head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Article Viewer</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    <script src="/static/app.js" defer></script>
+</head>
 <body>
-<h1>Article Viewer</h1>
-{{range .Sites}}<span class="pill">{{.}}</span>{{end}}
-{{template "cards" .Cards}}
+    <header id="top-bar">
+        <div class="top-inner">
+            <input
+                type="search"
+                id="search-input"
+                name="q"
+                value="{{.Q}}"
+                placeholder="Search articles&#x2026;"
+                autocomplete="off"
+                hx-get="/articles"
+                hx-trigger="keyup changed delay:300ms, search"
+                hx-target="#feed"
+                hx-swap="innerHTML"
+                hx-include="#site-filter,#cat-filter"
+            >
+            <input type="hidden" id="site-filter" name="site" value="{{.SelectedSite}}">
+            <input type="hidden" id="cat-filter"  name="category" value="{{.SelectedCat}}">
+        </div>
+        <div class="pills-row">
+            <div class="pills" id="site-pills">
+                {{range .Sites}}
+                <button type="button"
+                        class="pill{{if eq $.SelectedSite .}} active{{end}}"
+                        onclick="togglePill(this,'site-filter','{{.}}')">{{.}}</button>
+                {{end}}
+            </div>
+            <div class="pills pills-cats" id="cat-pills">
+                {{range .Categories}}
+                <button type="button"
+                        class="pill{{if eq $.SelectedCat .}} active{{end}}"
+                        onclick="togglePill(this,'cat-filter','{{.}}')">{{.}}</button>
+                {{end}}
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div id="feed">
+            {{template "cards" .Cards}}
+        </div>
+    </main>
+
+    <div id="modal-overlay">
+        <div id="modal-container"></div>
+    </div>
 </body>
 </html>

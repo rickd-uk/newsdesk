@@ -1,1 +1,42 @@
-{{define "modal"}}{{if .Title}}{{.Title}}{{end}}{{end}}
+{{define "modal"}}
+<div class="modal">
+    <div class="modal-header">
+        <div class="modal-title-group">
+            <h2 class="modal-title">{{.Title}}</h2>
+            <div class="modal-meta">
+                {{if .Site}}<span class="badge site">{{.Site}}</span>{{end}}
+                {{if .Category}}<span class="badge category">{{.Category}}</span>{{end}}
+                {{if .PublishDate}}<span class="date">{{.PublishDate}}</span>{{end}}
+                {{if .Author}}<span class="author">by {{.Author}}</span>{{end}}
+            </div>
+        </div>
+        <button class="close-btn" onclick="dismissModal()">&#x2715;</button>
+    </div>
+    <div class="modal-toolbar">
+        <div class="font-picker">
+            <span class="label">Font</span>
+            <button class="font-btn" data-font="serif" onclick="setFont('serif')">Serif</button>
+            <button class="font-btn" data-font="sans"  onclick="setFont('sans')">Sans</button>
+            <button class="font-btn" data-font="mono"  onclick="setFont('mono')">Mono</button>
+        </div>
+        <div class="size-picker">
+            <button class="size-btn" onclick="adjustSize(-1)">A&#x2212;</button>
+            <button class="size-btn" onclick="adjustSize(1)">A+</button>
+        </div>
+        <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
+        <a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>
+    </div>
+    <div class="modal-body" id="article-content">
+        {{range splitParagraphs .Content}}
+        <p>{{.}}</p>
+        {{end}}
+    </div>
+    {{if .Tags}}
+    <div class="modal-tags">
+        {{range splitTags .Tags}}
+        <span class="tag">{{.}}</span>
+        {{end}}
+    </div>
+    {{end}}
+</div>
+{{end}}

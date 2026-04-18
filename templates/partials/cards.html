@@ -1,1 +1,24 @@
-{{define "cards"}}{{range .Articles}}{{.Title}}{{end}}{{end}}
+{{define "cards"}}
+{{range .Articles}}
+<div class="card"
+     hx-get="/article/{{.ID}}"
+     hx-target="#modal-container"
+     hx-swap="innerHTML">
+    <div class="card-meta">
+        {{if .Site}}<span class="site">{{.Site}}</span>{{end}}
+        {{if .Category}}<span class="category">{{.Category}}</span>{{end}}
+        {{if .PublishDate}}<span class="date">{{.PublishDate}}</span>{{end}}
+    </div>
+    <h3 class="card-title">{{.Title}}</h3>
+    {{if .Author}}<div class="card-author">{{.Author}}</div>{{end}}
+    <p class="card-excerpt">{{excerpt .Content}}</p>
+</div>
+{{end}}
+{{if .HasMore}}
+<div class="scroll-sentinel"
+     hx-get="/articles?{{buildQuery .Q .Site .Category .NextOffset}}"
+     hx-trigger="intersect once"
+     hx-swap="outerHTML"
+     hx-target="this"></div>
+{{end}}
+{{end}}
