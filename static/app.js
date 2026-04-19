@@ -47,7 +47,13 @@ document.getElementById('modal-overlay').addEventListener('click', function(e) {
 });
 
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') dismissModal();
+    if (e.key === 'Escape') {
+        if (document.getElementById('modal-overlay').classList.contains('open')) {
+            dismissModal();
+        } else if (document.getElementById('filter-panel').classList.contains('open')) {
+            toggleFilters();
+        }
+    }
 });
 
 document.body.addEventListener('htmx:afterSwap', function(e) {
@@ -145,10 +151,13 @@ function applyCompactPref() {
 // ── Filter panel toggle ──
 
 function toggleFilters() {
-    const panel = document.getElementById('filter-panel');
-    const btn = document.getElementById('filter-btn');
+    const panel    = document.getElementById('filter-panel');
+    const btn      = document.getElementById('filter-btn');
+    const backdrop = document.getElementById('filter-backdrop');
     const open = panel.classList.toggle('open');
     btn.classList.toggle('active', open);
+    backdrop.classList.toggle('open', open);
+    document.body.style.overflow = open ? 'hidden' : '';
 }
 
 // ── Feed refresh ──
@@ -296,5 +305,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (hasFilters) {
         document.getElementById('filter-panel').classList.add('open');
         document.getElementById('filter-btn').classList.add('active');
+        document.getElementById('filter-backdrop').classList.add('open');
     }
 });

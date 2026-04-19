@@ -196,11 +196,11 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 			args = append(args, "%"+p.Author+"%")
 		}
 		if p.DateFrom != "" {
-			q += " AND a.publish_date >= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
 			args = append(args, p.DateFrom)
 		}
 		if p.DateTo != "" {
-			q += " AND a.publish_date <= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
 			args = append(args, p.DateTo)
 		}
 		if p.HideRead {
@@ -229,11 +229,11 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 		args = append(args, "%"+p.Author+"%")
 	}
 	if p.DateFrom != "" {
-		q += " AND a.publish_date >= ?"
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
 		args = append(args, p.DateFrom)
 	}
 	if p.DateTo != "" {
-		q += " AND a.publish_date <= ?"
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
 		args = append(args, p.DateTo)
 	}
 	if p.HideRead {
@@ -361,11 +361,11 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			args = append(args, "%"+p.Author+"%")
 		}
 		if p.DateFrom != "" {
-			q += " AND a.publish_date >= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
 			args = append(args, p.DateFrom)
 		}
 		if p.DateTo != "" {
-			q += " AND a.publish_date <= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
 			args = append(args, p.DateTo)
 		}
 		if p.HideRead {
@@ -402,11 +402,11 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			args = append(args, "%"+p.Author+"%")
 		}
 		if p.DateFrom != "" {
-			q += " AND a.publish_date >= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
 			args = append(args, p.DateFrom)
 		}
 		if p.DateTo != "" {
-			q += " AND a.publish_date <= ?"
+			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
 			args = append(args, p.DateTo)
 		}
 		if p.HideRead {

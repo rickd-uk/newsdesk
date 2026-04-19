@@ -29,7 +29,7 @@ type PageData struct {
 	SearchTags   bool
 	SelectedSite string
 	SelectedCat  string
-	ShowRead      bool
+	HideRead      bool
 	FavoritesOnly bool
 	Cards         CardsData
 }
@@ -44,7 +44,7 @@ type CardsData struct {
 	Fields     []string
 	Site       string
 	Category   string
-	ShowRead      bool
+	HideRead      bool
 	FavoritesOnly bool
 	NextOffset    int
 	HasMore       bool
@@ -137,8 +137,8 @@ func buildFuncMap() template.FuncMap {
 			for _, f := range d.Fields {
 				params.Add("fields", f)
 			}
-			if d.ShowRead {
-				params.Set("show_read", "1")
+			if d.HideRead {
+				params.Set("hide_read", "1")
 			}
 			if d.FavoritesOnly {
 				params.Set("favorites_only", "1")
@@ -181,13 +181,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	dateFrom := r.URL.Query().Get("date_from")
 	dateTo := r.URL.Query().Get("date_to")
 	fields := parseFields(r)
-	showRead      := r.URL.Query().Get("show_read") == "1"
+	hideRead      := r.URL.Query().Get("hide_read") == "1"
 	favoritesOnly := r.URL.Query().Get("favorites_only") == "1"
 
 	qp := QueryParams{
 		Q: q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
-		Fields: fields, HideRead: !showRead, FavoritesOnly: favoritesOnly,
+		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly,
 	}
 	sites, _ := s.db.GetSites()
 	catInfos, _ := s.db.GetCategoryInfos()
@@ -209,7 +209,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		SearchTags:   hasField(fields, "tags"),
 		SelectedSite: site,
 		SelectedCat:  cat,
-		ShowRead:      showRead,
+		HideRead:      hideRead,
 		FavoritesOnly: favoritesOnly,
 		Cards: CardsData{
 			Articles:      articles,
@@ -221,7 +221,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Fields:        fields,
 			Site:          site,
 			Category:      cat,
-			ShowRead:      showRead,
+			HideRead:      hideRead,
 			FavoritesOnly: favoritesOnly,
 			NextOffset:    pageSize,
 			HasMore:       len(articles) == pageSize,
@@ -241,12 +241,12 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	dateTo := r.URL.Query().Get("date_to")
 	fields := parseFields(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	showRead      := r.URL.Query().Get("show_read") == "1"
+	hideRead      := r.URL.Query().Get("hide_read") == "1"
 	favoritesOnly := r.URL.Query().Get("favorites_only") == "1"
 
 	qp := QueryParams{Q: q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
-		Fields: fields, HideRead: !showRead, FavoritesOnly: favoritesOnly}
+		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly}
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: offset,
 		Q: qp.Q, Site: qp.Site, Category: qp.Category,
 		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
@@ -276,8 +276,8 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		for _, f := range fields {
 			params.Add("fields", f)
 		}
-		if showRead {
-			params.Set("show_read", "1")
+		if hideRead {
+			params.Set("hide_read", "1")
 		}
 		if favoritesOnly {
 			params.Set("favorites_only", "1")
@@ -299,7 +299,7 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		Fields:     fields,
 		Site:       site,
 		Category:   cat,
-		ShowRead:      showRead,
+		HideRead:      hideRead,
 		FavoritesOnly: favoritesOnly,
 		NextOffset:    offset + pageSize,
 		HasMore:    len(articles) == pageSize,

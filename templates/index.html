@@ -33,6 +33,7 @@
         </div>
 
         <div id="filter-panel">
+            <button class="drawer-close-btn" onclick="toggleFilters()">&#x2715; Close</button>
             <input type="hidden" id="site-filter" name="site" value="{{.SelectedSite}}">
             <input type="hidden" id="cat-filter" name="category" value="{{.SelectedCat}}">
 
@@ -97,7 +98,7 @@
                     <div class="filter-section-label">Read</div>
                     <div class="filter-row">
                         <label class="check-label">
-                            <input type="checkbox" name="show_read" value="1" onchange="fireFeedRefresh()"{{if .ShowRead}} checked{{end}}> Show read
+                            <input type="checkbox" name="hide_read" value="1" onchange="fireFeedRefresh()"{{if .HideRead}} checked{{end}}> Hide read
                         </label>
                     </div>
                 </div>
@@ -144,6 +145,8 @@
             {{template "cards" .Cards}}
         </div>
     </main>
+
+    <div id="filter-backdrop" onclick="toggleFilters()"></div>
 
     <div id="modal-overlay">
         <div id="modal-container"></div>
