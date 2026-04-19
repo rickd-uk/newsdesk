@@ -24,9 +24,9 @@
             <button class="size-btn" onclick="adjustSize(1)">A+</button>
         </div>
         <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
-        <button class="unread-btn" id="unread-btn" onclick="markUnread()">Unread</button>
-        <button class="fav-btn{{if .Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()">{{if .Favorited}}★ Saved{{else}}☆ Save{{end}}</button>
-        {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#x2197; Original</a>{{end}}
+        <button class="unread-btn" id="unread-btn" onclick="markUnread()" title="Mark as unread"{{if not .Read}} disabled{{end}}>↩</button>
+        <button class="fav-btn{{if .Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Favorited}}Unsave{{else}}Save{{end}}">{{if .Favorited}}★{{else}}☆{{end}}</button>
+        {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
     </div>
     <div class="modal-body" id="article-content">
         {{range splitParagraphs .Content}}
@@ -40,5 +40,8 @@
         {{end}}
     </div>
     {{end}}
+    <div class="modal-footer-close">
+        <button class="modal-back-btn" onclick="dismissModal()">&#x2190; Back</button>
+    </div>
 </div>
 {{end}}

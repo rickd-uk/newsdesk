@@ -62,27 +62,76 @@ document.body.addEventListener('htmx:afterSwap', function(e) {
         document.body.style.overflow = 'hidden';
         applyPrefs();
 
-        // Auto-mark as read
-        const id = e.detail.elt.dataset.id;
-        if (id) {
-            const card = document.getElementById('card-' + id);
-            if (card) card.classList.add('read');
-            fetch('/article/' + id + '/read', { method: 'POST' });
-        }
+        var modalEl = document.querySelector('#modal-container .modal');
+        var id = modalEl && modalEl.dataset.articleId;
+        if (id) setupReadSentinel(id);
     }
 });
+
+// Mark as read once the user has scrolled to the bottom of the article.
+function setupReadSentinel(id) {
+    var content = document.getElementById('article-content');
+    var modal   = document.querySelector('.modal');
+    if (!content || !modal) return;
+
+    // Desktop: article-content scrolls (max-height + overflow-y: auto).
+    // Mobile:  .modal itself scrolls (max-height: 93vh; overflow-y: auto).
+    var isMobile = window.matchMedia('(max-width: 600px)').matches;
+    var scroller = isMobile ? modal : content;
+    var done     = false;
+
+    function doMark() {
+        if (done) return;
+        done = true;
+        scroller.removeEventListener('scroll', onScroll);
+
+        var card = document.getElementById('card-' + id);
+        if (card && !card.classList.contains('read')) {
+            card.classList.add('read');
+            var meta = card.querySelector('.card-meta');
+            if (meta && !meta.querySelector('.read-badge')) {
+                var badge = document.createElement('span');
+                badge.className = 'read-badge';
+                badge.title = 'Read';
+                badge.textContent = '✓ Read';
+                meta.prepend(badge);
+            }
+        }
+        var btn = document.getElementById('unread-btn');
+        if (btn) btn.disabled = false;
+        fetch('/article/' + id + '/read', { method: 'POST' });
+    }
+
+    function atBottom() {
+        var gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        return gap <= 60;
+    }
+
+    function onScroll() { if (atBottom()) doMark(); }
+
+    scroller.addEventListener('scroll', onScroll);
+    // Retry a few times to handle font/size reflow after applyPrefs()
+    var checks = [100, 300, 600];
+    checks.forEach(function(ms) {
+        setTimeout(function() { if (atBottom()) doMark(); }, ms);
+    });
+}
 
 // ── Mark unread ──
 
 function markUnread() {
-    const modal = document.querySelector('.modal');
-    const id = modal && modal.dataset.articleId;
+    var modal = document.querySelector('.modal');
+    var id = modal && modal.dataset.articleId;
     if (!id) return;
     fetch('/article/' + id + '/unread', { method: 'POST' }).then(function() {
-        const card = document.getElementById('card-' + id);
-        if (card) card.classList.remove('read');
-        const btn = document.getElementById('unread-btn');
-        if (btn) { btn.textContent = '✓ Unread'; btn.disabled = true; }
+        var card = document.getElementById('card-' + id);
+        if (card) {
+            card.classList.remove('read');
+            var badge = card.querySelector('.read-badge');
+            if (badge) badge.remove();
+        }
+        var btn = document.getElementById('unread-btn');
+        if (btn) btn.disabled = true;
     });
 }
 
@@ -99,7 +148,8 @@ function toggleFavorite() {
     fetch('/article/' + id + '/' + action, { method: 'POST' }).then(function() {
         if (btn) {
             btn.classList.toggle('active', !isFav);
-            btn.textContent = !isFav ? '★ Saved' : '☆ Save';
+            btn.textContent = !isFav ? '★' : '☆';
+            btn.title = !isFav ? 'Unsave' : 'Save';
         }
         if (card) card.classList.toggle('favorited', !isFav);
         // update star in card meta
@@ -173,6 +223,9 @@ function fireFeedRefresh() {
     const params = new URLSearchParams();
     const q = document.getElementById('search-input').value;
     if (q) params.set('q', q);
+    if (q.trim().length >= 2) addHistory('av-recent-searches', q.trim());
+    const authorVal = document.getElementById('author-input').value;
+    if (authorVal.trim().length >= 2) addHistory('av-recent-authors', authorVal.trim());
 
     document.querySelectorAll('#filter-panel [name]').forEach(function(el) {
         if (el.type === 'checkbox') {
@@ -289,17 +342,97 @@ function clearDates() {
     fireFeedRefresh();
 }
 
+// ── Recent history (search & author) ──
+
+function getHistory(key) {
+    try { return JSON.parse(localStorage.getItem(key) || '[]'); }
+    catch (e) { return []; }
+}
+
+function addHistory(key, value) {
+    if (!value) return;
+    var list = getHistory(key).filter(function(s) { return s !== value; });
+    list.unshift(value);
+    localStorage.setItem(key, JSON.stringify(list.slice(0, 12)));
+}
+
+var _activeDrop = null;
+
+function showSuggestions(type) {
+    var isSearch = type === 'search';
+    var inputId  = isSearch ? 'search-input' : 'author-input';
+    var dropId   = isSearch ? 'search-suggestions' : 'author-suggestions';
+    var key      = isSearch ? 'av-recent-searches' : 'av-recent-authors';
+
+    var input = document.getElementById(inputId);
+    var drop  = document.getElementById(dropId);
+    var list  = getHistory(key);
+
+    if (!list.length) { drop.hidden = true; return; }
+
+    drop.innerHTML = '';
+    list.forEach(function(term) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'suggestion-item';
+        btn.textContent = term;
+        btn.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            input.value = term;
+            hideSuggestions();
+            fireFeedRefresh();
+        });
+        drop.appendChild(btn);
+    });
+
+    var clr = document.createElement('button');
+    clr.type = 'button';
+    clr.className = 'suggestions-clear';
+    clr.textContent = 'Clear history';
+    clr.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        localStorage.removeItem(key);
+        hideSuggestions();
+    });
+    drop.appendChild(clr);
+
+    if (isSearch) {
+        // Position fixed below the search input
+        var rect = input.getBoundingClientRect();
+        drop.style.top   = (rect.bottom + 4) + 'px';
+        drop.style.left  = rect.left + 'px';
+        drop.style.width = rect.width + 'px';
+    }
+
+    drop.hidden = false;
+    _activeDrop = drop;
+}
+
+function hideSuggestions() {
+    if (_activeDrop) { _activeDrop.hidden = true; _activeDrop = null; }
+}
+
 // ── Init ──
 
 document.addEventListener('DOMContentLoaded', function() {
     applyCompactPref();
     filterCategoryPills(document.getElementById('site-filter').value);
     updateFilterBadge();
+
+    // Wire up history dropdowns
+    var searchInput = document.getElementById('search-input');
+    var authorInput = document.getElementById('author-input');
+
+    searchInput.addEventListener('focus', function() { showSuggestions('search'); });
+    searchInput.addEventListener('blur',  function() { setTimeout(hideSuggestions, 150); });
+    authorInput.addEventListener('focus', function() { showSuggestions('author'); });
+    authorInput.addEventListener('blur',  function() { setTimeout(hideSuggestions, 150); });
+
     // Auto-open filter panel if any active filters on page load
     const hasFilters =
         document.getElementById('site-filter')?.value ||
         document.getElementById('cat-filter')?.value ||
-        document.getElementById('author-input')?.value ||
+        authorInput?.value ||
         document.querySelector('[name="date_from"]')?.value ||
         document.querySelector('[name="date_to"]')?.value;
     if (hasFilters) {

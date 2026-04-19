@@ -10,6 +10,7 @@
      hx-target="#modal-container"
      hx-swap="innerHTML">
     <div class="card-meta">
+        {{if .Read}}<span class="read-badge" title="Read">✓</span>{{end}}
         {{if .Favorited}}<span class="fav-star">★</span>{{end}}
         {{if .Site}}<span class="site">{{.Site}}</span>{{end}}
         {{if .Category}}<span class="category">{{.Category}}</span>{{end}}
