@@ -2,5 +2,11 @@ articles.db
 user_data/
 *.db-shm
 *.db-wal
+*.db.bak
+*.db-shm.bak
+*.db-wal.bak
+db-backups/
+db-rescue-*/
 article-viewer
+news-desk
 .superpowers/

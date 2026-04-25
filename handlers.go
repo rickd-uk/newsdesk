@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"html/template"
 	"log"
 	"net/http"
@@ -18,36 +19,45 @@ type Server struct {
 }
 
 type PageData struct {
-	Sites           []string
-	CategoryGroups  []CategoryGroup
-	Q            string
-	Author       string
-	DateFrom     string
-	DateTo       string
-	SearchTitle  bool
-	SearchBody   bool
-	SearchTags   bool
-	SelectedSite string
-	SelectedCat  string
-	HideRead      bool
-	FavoritesOnly bool
-	Cards         CardsData
+	Sites          []string
+	CategoryGroups []CategoryGroup
+	CurrentUser    *User
+	AuthError      string
+	AuthMode       string
+	CurrentPath    string
+	Q              string
+	Author         string
+	DateFrom       string
+	DateTo         string
+	SearchTitle    bool
+	SearchBody     bool
+	SearchTags     bool
+	SelectedSite   string
+	SelectedCat    string
+	HideRead       bool
+	FavoritesOnly  bool
+	Cards          CardsData
 }
 
 type CardsData struct {
-	Articles   []Article
-	TotalCount int
-	Q          string
-	Author     string
-	DateFrom   string
-	DateTo     string
-	Fields     []string
-	Site       string
-	Category   string
+	Articles      []Article
+	TotalCount    int
+	Q             string
+	Author        string
+	DateFrom      string
+	DateTo        string
+	Fields        []string
+	Site          string
+	Category      string
 	HideRead      bool
 	FavoritesOnly bool
 	NextOffset    int
 	HasMore       bool
+}
+
+type ModalData struct {
+	Article     *Article
+	CurrentUser *User
 }
 
 func parseFields(r *http.Request) []string {
@@ -174,6 +184,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
 	q := r.URL.Query().Get("q")
 	site := r.URL.Query().Get("site")
 	cat := r.URL.Query().Get("category")
@@ -181,11 +196,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	dateFrom := r.URL.Query().Get("date_from")
 	dateTo := r.URL.Query().Get("date_to")
 	fields := parseFields(r)
-	hideRead      := r.URL.Query().Get("hide_read") == "1"
-	favoritesOnly := r.URL.Query().Get("favorites_only") == "1"
+	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
+	favoritesOnly := user != nil && r.URL.Query().Get("favorites_only") == "1"
+
+	userID := 0
+	if user != nil {
+		userID = user.ID
+	}
 
 	qp := QueryParams{
-		Q: q, Site: site, Category: cat,
+		UserID: userID,
+		Q:      q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
 		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly,
 	}
@@ -200,17 +221,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	data := PageData{
 		Sites:          sites,
 		CategoryGroups: BuildCategoryTree(catInfos),
-		Q:            q,
-		Author:       author,
-		DateFrom:     dateFrom,
-		DateTo:       dateTo,
-		SearchTitle:  hasField(fields, "title"),
-		SearchBody:   hasField(fields, "body"),
-		SearchTags:   hasField(fields, "tags"),
-		SelectedSite: site,
-		SelectedCat:  cat,
-		HideRead:      hideRead,
-		FavoritesOnly: favoritesOnly,
+		CurrentUser:    user,
+		AuthError:      r.URL.Query().Get("auth_error"),
+		AuthMode:       r.URL.Query().Get("auth_mode"),
+		CurrentPath:    currentPath(r),
+		Q:              q,
+		Author:         author,
+		DateFrom:       dateFrom,
+		DateTo:         dateTo,
+		SearchTitle:    hasField(fields, "title"),
+		SearchBody:     hasField(fields, "body"),
+		SearchTags:     hasField(fields, "tags"),
+		SelectedSite:   site,
+		SelectedCat:    cat,
+		HideRead:       hideRead,
+		FavoritesOnly:  favoritesOnly,
 		Cards: CardsData{
 			Articles:      articles,
 			TotalCount:    total,
@@ -233,6 +258,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
 	q := r.URL.Query().Get("q")
 	site := r.URL.Query().Get("site")
 	cat := r.URL.Query().Get("category")
@@ -241,10 +271,14 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	dateTo := r.URL.Query().Get("date_to")
 	fields := parseFields(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	hideRead      := r.URL.Query().Get("hide_read") == "1"
-	favoritesOnly := r.URL.Query().Get("favorites_only") == "1"
+	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
+	favoritesOnly := user != nil && r.URL.Query().Get("favorites_only") == "1"
 
-	qp := QueryParams{Q: q, Site: site, Category: cat,
+	userID := 0
+	if user != nil {
+		userID = user.ID
+	}
+	qp := QueryParams{UserID: userID, Q: q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
 		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly}
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: offset,
@@ -290,19 +324,19 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := CardsData{
-		Articles:   articles,
-		TotalCount: total,
-		Q:          q,
-		Author:     author,
-		DateFrom:   dateFrom,
-		DateTo:     dateTo,
-		Fields:     fields,
-		Site:       site,
-		Category:   cat,
+		Articles:      articles,
+		TotalCount:    total,
+		Q:             q,
+		Author:        author,
+		DateFrom:      dateFrom,
+		DateTo:        dateTo,
+		Fields:        fields,
+		Site:          site,
+		Category:      cat,
 		HideRead:      hideRead,
 		FavoritesOnly: favoritesOnly,
 		NextOffset:    offset + pageSize,
-		HasMore:    len(articles) == pageSize,
+		HasMore:       len(articles) == pageSize,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "cards", data); err != nil {
 		log.Printf("execute cards: %v", err)
@@ -326,62 +360,204 @@ func (s *Server) handleArticleDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/article/")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	article, err := s.db.GetArticleByID(id)
+	userID := 0
+	if user != nil {
+		userID = user.ID
+	}
+	article, err := s.db.GetArticleByID(id, userID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.tmpl.ExecuteTemplate(w, "modal", article); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "modal", ModalData{Article: article, CurrentUser: user}); err != nil {
 		log.Printf("execute modal: %v", err)
 	}
 }
 
 func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/read")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	s.db.MarkRead(id)
+	s.db.MarkRead(user.ID, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleMarkUnread(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/unread")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	s.db.MarkUnread(id)
+	s.db.MarkUnread(user.ID, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleMarkFavorite(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/favorite")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	s.db.MarkFavorite(id)
+	s.db.MarkFavorite(user.ID, id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleUnmarkFavorite(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
 	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/unfavorite")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	s.db.UnmarkFavorite(id)
+	s.db.UnmarkFavorite(user.ID, id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	user, err := s.db.CreateUser(r.FormValue("username"), r.FormValue("email"), r.FormValue("password"))
+	if err != nil {
+		s.redirectAuthError(w, r, err.Error(), "signup")
+		return
+	}
+	token, err := s.db.CreateSession(user.ID)
+	if err != nil {
+		http.Error(w, "session create failed", http.StatusInternalServerError)
+		return
+	}
+	setSessionCookie(w, token)
+	http.Redirect(w, r, authRedirectTarget(r, false), http.StatusSeeOther)
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	user, err := s.db.AuthenticateUser(r.FormValue("identifier"), r.FormValue("password"))
+	if err != nil {
+		if errors.Is(err, errInvalidCredentials) {
+			s.redirectAuthError(w, r, "invalid username, email, or password", "login")
+			return
+		}
+		http.Error(w, "login failed", http.StatusInternalServerError)
+		return
+	}
+	token, err := s.db.CreateSession(user.ID)
+	if err != nil {
+		http.Error(w, "session create failed", http.StatusInternalServerError)
+		return
+	}
+	setSessionCookie(w, token)
+	http.Redirect(w, r, authRedirectTarget(r, false), http.StatusSeeOther)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cookie, _ := r.Cookie(sessionCookieName)
+	if cookie != nil {
+		_ = s.db.DeleteSession(cookie.Value)
+	}
+	clearSessionCookie(w)
+	http.Redirect(w, r, authRedirectTarget(r, false), http.StatusSeeOther)
+}
+
+func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*User, bool) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if user == nil {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return nil, false
+	}
+	return user, true
+}
+
+func authRedirectTarget(r *http.Request, withError bool) string {
+	target := r.FormValue("next")
+	if target == "" || !strings.HasPrefix(target, "/") {
+		target = "/"
+	}
+	if !withError {
+		u, err := url.Parse(target)
+		if err == nil {
+			q := u.Query()
+			q.Del("auth_error")
+			q.Del("auth_mode")
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+	}
+	return target
+}
+
+func (s *Server) redirectAuthError(w http.ResponseWriter, r *http.Request, msg, mode string) {
+	target := authRedirectTarget(r, true)
+	u, err := url.Parse(target)
+	if err != nil {
+		http.Redirect(w, r, "/?auth_error="+url.QueryEscape(msg), http.StatusSeeOther)
+		return
+	}
+	q := u.Query()
+	q.Set("auth_error", msg)
+	if mode != "" {
+		q.Set("auth_mode", mode)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusSeeOther)
+}
+
+func currentPath(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return r.URL.Path
+	}
+	return r.URL.Path + "?" + r.URL.RawQuery
 }

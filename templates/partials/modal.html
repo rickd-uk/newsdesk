@@ -1,13 +1,13 @@
 {{define "modal"}}
-<div class="modal" data-article-id="{{.ID}}">
+<div class="modal" data-article-id="{{.Article.ID}}" data-authenticated="{{if .CurrentUser}}1{{else}}0{{end}}">
     <div class="modal-header">
         <div class="modal-title-group">
-            <h2 class="modal-title">{{.Title}}</h2>
+            <h2 class="modal-title">{{.Article.Title}}</h2>
             <div class="modal-meta">
-                {{if .Site}}<span class="badge site">{{.Site}}</span>{{end}}
-                {{if .Category}}<span class="badge category">{{.Category}}</span>{{end}}
-                {{if .PublishDate}}<span class="date">{{.PublishDate}}</span>{{end}}
-                {{if .Author}}<span class="author">by {{.Author}}</span>{{end}}
+                {{if .Article.Site}}<span class="badge site">{{.Article.Site}}</span>{{end}}
+                {{if .Article.Category}}<span class="badge category">{{.Article.Category}}</span>{{end}}
+                {{if .Article.PublishDate}}<span class="date">{{.Article.PublishDate}}</span>{{end}}
+                {{if .Article.Author}}<span class="author">by {{.Article.Author}}</span>{{end}}
             </div>
         </div>
         <button class="close-btn" onclick="dismissModal()">&#x2715;</button>
@@ -24,18 +24,21 @@
             <button class="size-btn" onclick="adjustSize(1)">A+</button>
         </div>
         <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
-        <button class="unread-btn" id="unread-btn" onclick="markUnread()" title="Mark as unread"{{if not .Read}} disabled{{end}}>↩</button>
-        <button class="fav-btn{{if .Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Favorited}}Unsave{{else}}Save{{end}}">{{if .Favorited}}★{{else}}☆{{end}}</button>
-        {{if .URL}}<a class="original-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
+        <button class="unread-btn" id="unread-btn" onclick="markUnread()" title="Mark as unread"{{if or (not .CurrentUser) (not .Article.Read)}} disabled{{end}}>↩</button>
+        <button class="fav-btn{{if .Article.Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Article.Favorited}}Unsave{{else}}Save{{end}}"{{if not .CurrentUser}} disabled{{end}}>{{if .Article.Favorited}}★{{else}}☆{{end}}</button>
+        {{if .Article.URL}}<a class="original-link" href="{{.Article.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
     </div>
+    {{if not .CurrentUser}}
+    <div class="auth-note">Sign up or log in to track reads and saved articles.</div>
+    {{end}}
     <div class="modal-body" id="article-content">
-        {{range splitParagraphs .Content}}
+        {{range splitParagraphs .Article.Content}}
         <p>{{.}}</p>
         {{end}}
     </div>
-    {{if .Tags}}
+    {{if .Article.Tags}}
     <div class="modal-tags">
-        {{range splitTags .Tags}}
+        {{range splitTags .Article.Tags}}
         <span class="tag">{{.}}</span>
         {{end}}
     </div>

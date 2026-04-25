@@ -9,8 +9,9 @@ A fast, read-only web app for browsing articles stored in a SQLite database. Des
 - Category hierarchy display (e.g. `news_japan_history` → News › Japan › history)
 - Infinite scroll pagination
 - Article reading modal with font/size preferences
-- Read tracking — articles auto-marked as read when opened; hidden from feed by default
-- Favorites — star articles to save them; filter to show only favorites
+- Local signup/login with cookie-based sessions
+- Read tracking — user-specific, auto-marked as read when opened; hidden from feed by default
+- Favorites — user-specific starred articles; filter to show only favorites
 - Compact card view for dense browsing
 - Mobile-friendly with touch-optimised controls
 - Dark theme
@@ -60,11 +61,15 @@ See [CLAUDE.md](CLAUDE.md) for the full Hetzner VPS deployment guide covering de
 
 ## Database
 
-The `articles` table is written by a separate scraper. This app is read-only with respect to `articles`. It creates two additional tables for its own state:
+The `articles` table is written by a separate scraper. This app is read-only with respect to `articles`. It creates additional tables for auth and per-user state:
 
 - `articles_fts` — FTS5 full-text search index (populated on startup)
-- `article_reads` — tracks which articles have been read
-- `article_favorites` — tracks starred articles
+- `users` — local accounts
+- `user_sessions` — login sessions
+- `article_reads` — tracks which articles a given user has read
+- `article_favorites` — tracks which articles a given user has starred
+
+If the app starts against an older database that still has global `article_reads` or `article_favorites` tables, they are renamed to `*_legacy_global` and new user-scoped tables are created.
 
 ## Project layout
 

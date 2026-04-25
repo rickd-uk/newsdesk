@@ -26,6 +26,12 @@ func main() {
 	if err := db.InitFTS(); err != nil {
 		log.Fatalf("init fts: %v", err)
 	}
+	if err := db.InitUsersTable(); err != nil {
+		log.Fatalf("init users table: %v", err)
+	}
+	if err := db.InitSessionsTable(); err != nil {
+		log.Fatalf("init sessions table: %v", err)
+	}
 	if err := db.InitReadTable(); err != nil {
 		log.Fatalf("init read table: %v", err)
 	}
@@ -44,6 +50,9 @@ func main() {
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	http.HandleFunc("/articles", srv.handleArticles)
 	http.HandleFunc("/article/", srv.handleArticleDispatch)
+	http.HandleFunc("/signup", srv.handleSignup)
+	http.HandleFunc("/login", srv.handleLogin)
+	http.HandleFunc("/logout", srv.handleLogout)
 	http.HandleFunc("/", srv.handleIndex)
 
 	fmt.Printf("article-viewer listening on %s\n", *addr)

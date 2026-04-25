@@ -42,6 +42,39 @@ function dismissModal() {
     document.getElementById('modal-container').innerHTML = '';
 }
 
+function openAuthModal(mode) {
+    const overlay = document.getElementById('auth-overlay');
+    if (!overlay) return;
+    if (mode === 'signup' || mode === 'login') setAuthMode(mode);
+    overlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeAuthModal() {
+    const overlay = document.getElementById('auth-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('open');
+    document.body.style.overflow = document.getElementById('modal-overlay').classList.contains('open') ? 'hidden' : '';
+}
+
+function handleAuthOverlayClick(e) {
+    if (e.target.id === 'auth-overlay') closeAuthModal();
+}
+
+function setAuthMode(mode) {
+    const signupTab = document.getElementById('auth-tab-signup');
+    const loginTab = document.getElementById('auth-tab-login');
+    const signupPanel = document.getElementById('auth-panel-signup');
+    const loginPanel = document.getElementById('auth-panel-login');
+    if (!signupTab || !loginTab || !signupPanel || !loginPanel) return;
+
+    const login = mode === 'login';
+    signupTab.classList.toggle('active', !login);
+    loginTab.classList.toggle('active', login);
+    signupPanel.classList.toggle('hidden', login);
+    loginPanel.classList.toggle('hidden', !login);
+}
+
 document.getElementById('modal-overlay').addEventListener('click', function(e) {
     if (e.target === this) dismissModal();
 });
@@ -50,6 +83,8 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         if (document.getElementById('modal-overlay').classList.contains('open')) {
             dismissModal();
+        } else if (document.getElementById('auth-overlay').classList.contains('open')) {
+            closeAuthModal();
         } else if (document.getElementById('filter-panel').classList.contains('open')) {
             toggleFilters();
         }
@@ -73,6 +108,7 @@ function setupReadSentinel(id) {
     var content = document.getElementById('article-content');
     var modal   = document.querySelector('.modal');
     if (!content || !modal) return;
+    if (modal.dataset.authenticated !== '1') return;
 
     // Desktop: article-content scrolls (max-height + overflow-y: auto).
     // Mobile:  .modal itself scrolls (max-height: 93vh; overflow-y: auto).
@@ -122,7 +158,7 @@ function setupReadSentinel(id) {
 function markUnread() {
     var modal = document.querySelector('.modal');
     var id = modal && modal.dataset.articleId;
-    if (!id) return;
+    if (!id || modal.dataset.authenticated !== '1') return;
     fetch('/article/' + id + '/unread', { method: 'POST' }).then(function() {
         var card = document.getElementById('card-' + id);
         if (card) {
@@ -140,7 +176,7 @@ function markUnread() {
 function toggleFavorite() {
     const modal = document.querySelector('.modal');
     const id = modal && modal.dataset.articleId;
-    if (!id) return;
+    if (!id || modal.dataset.authenticated !== '1') return;
     const btn = document.getElementById('fav-btn');
     const card = document.getElementById('card-' + id);
     const isFav = btn && btn.classList.contains('active');
@@ -418,6 +454,10 @@ document.addEventListener('DOMContentLoaded', function() {
     applyCompactPref();
     filterCategoryPills(document.getElementById('site-filter').value);
     updateFilterBadge();
+    if (document.getElementById('auth-overlay')?.classList.contains('preopen')) {
+        openAuthModal(document.getElementById('auth-tab-login')?.classList.contains('active') ? 'login' : 'signup');
+        document.getElementById('auth-overlay').classList.remove('preopen');
+    }
 
     // Wire up history dropdowns
     var searchInput = document.getElementById('search-input');

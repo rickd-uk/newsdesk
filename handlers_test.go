@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -114,5 +115,40 @@ func TestHandleArticle_BadID(t *testing.T) {
 	srv.handleArticle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestHandleSignup(t *testing.T) {
+	srv := testServer(t)
+	form := url.Values{
+		"username": {"user1"},
+		"email":    {""},
+		"password": {"password123"},
+		"next":     {"/"},
+	}
+	req := httptest.NewRequest("POST", "/signup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.handleSignup(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("want 303, got %d", w.Code)
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) == 0 || cookies[0].Name != sessionCookieName {
+		t.Fatalf("want %q session cookie, got %#v", sessionCookieName, cookies)
+	}
+}
+
+func TestHandleMarkRead_RequiresLogin(t *testing.T) {
+	srv := testServer(t)
+	req := httptest.NewRequest("POST", "/article/1/read", nil)
+	w := httptest.NewRecorder()
+
+	srv.handleMarkRead(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -25,6 +26,7 @@ type Article struct {
 }
 
 type QueryParams struct {
+	UserID        int
 	Q             string
 	Site          string
 	Category      string
@@ -55,6 +57,22 @@ func buildFTSPrefix(fields []string) string {
 	return "{" + strings.Join(cols, " ") + "}:"
 }
 
+func buildFTSQuery(fields []string, raw string) string {
+	var terms []string
+	for _, term := range strings.FieldsFunc(raw, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		term = strings.TrimSpace(term)
+		if term != "" {
+			terms = append(terms, term+"*")
+		}
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+	return buildFTSPrefix(fields) + strings.Join(terms, " ")
+}
+
 type DB struct {
 	*sql.DB
 }
@@ -71,63 +89,154 @@ func OpenDB(path string) (*DB, error) {
 	return &DB{db}, nil
 }
 
-// InitFTS creates a standalone FTS5 index populated once at startup.
-// New articles inserted after startup are not searchable until restart.
+// InitFTS creates or repairs the standalone FTS5 index from articles.
 func (db *DB) InitFTS() error {
-	_, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
-		USING fts5(title, body, tags)`)
-	if err != nil {
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
+		USING fts5(title, body, tags)`); err != nil {
 		return fmt.Errorf("create fts table: %w", err)
 	}
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM articles_fts").Scan(&count); err != nil {
+
+	var articleCount, ftsCount, missingCount, orphanCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM articles").Scan(&articleCount); err != nil {
+		return fmt.Errorf("check article count: %w", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM articles_fts").Scan(&ftsCount); err != nil {
 		return fmt.Errorf("check fts count: %w", err)
 	}
-	if count == 0 {
-		_, err = db.Exec(`INSERT INTO articles_fts(rowid, title, body, tags)
-			SELECT id, COALESCE(title,''), COALESCE(content,''), COALESCE(tags,'')
-			FROM articles`)
+	if err := db.QueryRow(`SELECT COUNT(*)
+		FROM articles a
+		LEFT JOIN articles_fts f ON f.rowid = a.id
+		WHERE f.rowid IS NULL`).Scan(&missingCount); err != nil {
+		return fmt.Errorf("check missing fts rows: %w", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*)
+		FROM articles_fts f
+		LEFT JOIN articles a ON a.id = f.rowid
+		WHERE a.id IS NULL`).Scan(&orphanCount); err != nil {
+		return fmt.Errorf("check orphan fts rows: %w", err)
+	}
+
+	if articleCount != ftsCount || missingCount > 0 || orphanCount > 0 {
+		tx, err := db.Begin()
 		if err != nil {
+			return fmt.Errorf("begin fts rebuild: %w", err)
+		}
+		if _, err = tx.Exec("DROP TABLE IF EXISTS articles_fts"); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("drop stale fts table: %w", err)
+		}
+		if _, err = tx.Exec(`CREATE VIRTUAL TABLE articles_fts
+			USING fts5(title, body, tags)`); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("recreate fts table: %w", err)
+		}
+		if _, err = tx.Exec(`INSERT INTO articles_fts(rowid, title, body, tags)
+			SELECT id, COALESCE(title,''), COALESCE(content,''), COALESCE(tags,'')
+			FROM articles`); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("populate fts: %w", err)
+		}
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("commit fts rebuild: %w", err)
 		}
 	}
 	return nil
 }
 
 func (db *DB) InitFavoritesTable() error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_favorites (
-		article_id INTEGER PRIMARY KEY,
-		favorited_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`)
+	return db.initArticleStateTable("article_favorites", "favorited_at")
+}
+
+func (db *DB) MarkFavorite(userID, id int) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO article_favorites(user_id, article_id) VALUES(?, ?)`, userID, id)
 	return err
 }
 
-func (db *DB) MarkFavorite(id int) error {
-	_, err := db.Exec(`INSERT OR IGNORE INTO article_favorites(article_id) VALUES(?)`, id)
-	return err
-}
-
-func (db *DB) UnmarkFavorite(id int) error {
-	_, err := db.Exec(`DELETE FROM article_favorites WHERE article_id = ?`, id)
+func (db *DB) UnmarkFavorite(userID, id int) error {
+	_, err := db.Exec(`DELETE FROM article_favorites WHERE user_id = ? AND article_id = ?`, userID, id)
 	return err
 }
 
 func (db *DB) InitReadTable() error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_reads (
-		article_id INTEGER PRIMARY KEY,
-		read_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`)
+	return db.initArticleStateTable("article_reads", "read_at")
+}
+
+func (db *DB) MarkRead(userID, id int) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO article_reads(user_id, article_id) VALUES(?, ?)`, userID, id)
 	return err
 }
 
-func (db *DB) MarkRead(id int) error {
-	_, err := db.Exec(`INSERT OR IGNORE INTO article_reads(article_id) VALUES(?)`, id)
+func (db *DB) MarkUnread(userID, id int) error {
+	_, err := db.Exec(`DELETE FROM article_reads WHERE user_id = ? AND article_id = ?`, userID, id)
 	return err
 }
 
-func (db *DB) MarkUnread(id int) error {
-	_, err := db.Exec(`DELETE FROM article_reads WHERE article_id = ?`, id)
+func (db *DB) initArticleStateTable(tableName, timestampCol string) error {
+	hasUserID, err := db.tableHasColumn(tableName, "user_id")
+	if err != nil {
+		return err
+	}
+	if !hasUserID {
+		exists, err := db.tableExists(tableName)
+		if err != nil {
+			return err
+		}
+		if exists {
+			legacyName := tableName + "_legacy_global"
+			if _, err := db.Exec("ALTER TABLE " + tableName + " RENAME TO " + legacyName); err != nil {
+				return fmt.Errorf("migrate %s: %w", tableName, err)
+			}
+			log.Printf("migrated legacy global table %s to %s; new rows are now user-scoped", tableName, legacyName)
+		}
+	}
+	_, err = db.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+		user_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		%s DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(user_id, article_id),
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`, tableName, timestampCol))
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_article_id ON %s(article_id)`, tableName, tableName))
 	return err
+}
+
+func (db *DB) tableExists(tableName string) (bool, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, tableName).Scan(&count)
+	return count > 0, err
+}
+
+func (db *DB) tableHasColumn(tableName, col string) (bool, error) {
+	exists, err := db.tableExists(tableName)
+	if err != nil || !exists {
+		return false, err
+	}
+	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (db *DB) GetSites() ([]string, error) {
@@ -176,13 +285,16 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 	var count int
 	searchQ := strings.TrimSpace(p.Q)
 	if searchQ != "" {
-		ftsQ := buildFTSPrefix(p.Fields) + searchQ + "*"
+		ftsQ := buildFTSQuery(p.Fields, searchQ)
+		if ftsQ == "" {
+			return 0, nil
+		}
 		q := `SELECT COUNT(*) FROM articles_fts f
 		      JOIN articles a ON a.id = f.rowid
-		      LEFT JOIN article_reads r ON a.id = r.article_id
-		      LEFT JOIN article_favorites fav ON a.id = fav.article_id
+		      LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
+		      LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 		      WHERE articles_fts MATCH ?`
-		args := []interface{}{ftsQ}
+		args := []interface{}{p.UserID, p.UserID, ftsQ}
 		if p.Site != "" {
 			q += " AND a.site = ?"
 			args = append(args, p.Site)
@@ -212,10 +324,10 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 		return count, db.QueryRow(q, args...).Scan(&count)
 	}
 	q := `SELECT COUNT(*) FROM articles a
-	      LEFT JOIN article_reads r ON a.id = r.article_id
-	      LEFT JOIN article_favorites fav ON a.id = fav.article_id
+	      LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
+	      LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 	      WHERE 1=1`
-	args := []interface{}{}
+	args := []interface{}{p.UserID, p.UserID}
 	if p.Site != "" {
 		q += " AND a.site = ?"
 		args = append(args, p.Site)
@@ -335,7 +447,10 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 
 	searchQ := strings.TrimSpace(p.Q)
 	if searchQ != "" {
-		ftsQ := buildFTSPrefix(p.Fields) + searchQ + "*"
+		ftsQ := buildFTSQuery(p.Fields, searchQ)
+		if ftsQ == "" {
+			return nil, nil
+		}
 		q := `SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
 			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
@@ -344,10 +459,10 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 			FROM articles_fts f
 			JOIN articles a ON a.id = f.rowid
-			LEFT JOIN article_reads r ON a.id = r.article_id
-			LEFT JOIN article_favorites fav ON a.id = fav.article_id
+			LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
+			LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 			WHERE articles_fts MATCH ?`
-		args := []interface{}{ftsQ}
+		args := []interface{}{p.UserID, p.UserID, ftsQ}
 		if p.Site != "" {
 			q += " AND a.site = ?"
 			args = append(args, p.Site)
@@ -385,10 +500,10 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
 			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 			FROM articles a
-			LEFT JOIN article_reads r ON a.id = r.article_id
-			LEFT JOIN article_favorites fav ON a.id = fav.article_id
+			LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
+			LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 			WHERE 1=1`
-		args := []interface{}{}
+		args := []interface{}{p.UserID, p.UserID}
 		if p.Site != "" {
 			q += " AND a.site = ?"
 			args = append(args, p.Site)
@@ -437,7 +552,7 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 	return articles, rows.Err()
 }
 
-func (db *DB) GetArticleByID(id int) (*Article, error) {
+func (db *DB) GetArticleByID(id, userID int) (*Article, error) {
 	row := db.QueryRow(`SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
 		COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 		COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
@@ -445,9 +560,9 @@ func (db *DB) GetArticleByID(id int) (*Article, error) {
 		CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
 		CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
 		FROM articles a
-		LEFT JOIN article_reads r ON a.id = r.article_id
-		LEFT JOIN article_favorites fav ON a.id = fav.article_id
-		WHERE a.id = ?`, id)
+		LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
+		LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
+		WHERE a.id = ?`, userID, userID, id)
 	var a Article
 	if err := row.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
 		&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,

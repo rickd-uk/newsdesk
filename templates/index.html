@@ -32,6 +32,20 @@
                 <button type="button" class="clear-btn" onclick="clearInput('search-input')" title="Clear search">&#x2715;</button>
             </div>
             <button id="view-btn" class="filter-btn" type="button" onclick="toggleCompact()" title="Toggle compact view">&#9783;</button>
+            {{if .CurrentUser}}
+            <div class="account-chip">
+                <button type="button" class="auth-trigger auth-trigger-user" onclick="openAuthModal('account')">{{.CurrentUser.Username}}</button>
+            </div>
+            {{else}}
+            <button type="button" class="auth-trigger" onclick="openAuthModal('signup')">Sign up / Log in</button>
+            {{end}}
+        </div>
+        <div class="auth-row">
+            {{if .CurrentUser}}
+            <div class="auth-status">Browsing as <strong>{{.CurrentUser.Username}}</strong>{{if .CurrentUser.Email}} · {{.CurrentUser.Email}}{{end}}</div>
+            {{else}}
+            <div class="auth-status">Search and read freely. Create an account only if you want saved and read tracking.</div>
+            {{end}}
         </div>
 
     </header>
@@ -102,7 +116,7 @@
                 <div class="filter-section-label">Read</div>
                 <div class="filter-row">
                     <label class="check-label">
-                        <input type="checkbox" name="hide_read" value="1" onchange="fireFeedRefresh()"{{if .HideRead}} checked{{end}}> Hide read
+                        <input type="checkbox" name="hide_read" value="1" onchange="fireFeedRefresh()"{{if .HideRead}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Hide read
                     </label>
                 </div>
             </div>
@@ -110,7 +124,7 @@
                 <div class="filter-section-label">Saved</div>
                 <div class="filter-row">
                     <label class="check-label">
-                        <input type="checkbox" name="favorites_only" value="1" onchange="fireFeedRefresh()"{{if .FavoritesOnly}} checked{{end}}> ★ Only
+                        <input type="checkbox" name="favorites_only" value="1" onchange="fireFeedRefresh()"{{if .FavoritesOnly}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> ★ Only
                     </label>
                 </div>
             </div>
@@ -161,6 +175,53 @@
 
     <div id="modal-overlay">
         <div id="modal-container"></div>
+    </div>
+
+    <div id="auth-overlay" class="{{if or .AuthError .AuthMode}}preopen{{end}}" onclick="handleAuthOverlayClick(event)">
+        <div id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+            <button class="auth-close-btn" type="button" onclick="closeAuthModal()" title="Close">&#x2715;</button>
+            {{if .CurrentUser}}
+            <div class="auth-panel account-panel">
+                <div class="auth-kicker">Account</div>
+                <h2 id="auth-title">Signed in as {{.CurrentUser.Username}}</h2>
+                {{if .CurrentUser.Email}}<p class="auth-copy">{{.CurrentUser.Email}}</p>{{end}}
+                <p class="auth-copy">Your read history and starred articles are stored on this account.</p>
+                <form method="post" action="/logout" class="auth-stack-form">
+                    <input type="hidden" name="next" value="{{.CurrentPath}}">
+                    <button type="submit" class="auth-btn auth-btn-primary">Log out</button>
+                </form>
+            </div>
+            {{else}}
+            <div class="auth-tabs">
+                <button type="button" id="auth-tab-signup" class="auth-tab{{if ne .AuthMode "login"}} active{{end}}" onclick="setAuthMode('signup')">✦ Sign up</button>
+                <button type="button" id="auth-tab-login" class="auth-tab{{if eq .AuthMode "login"}} active{{end}}" onclick="setAuthMode('login')">↪ Log in</button>
+            </div>
+            {{if .AuthError}}<div class="auth-error">{{.AuthError}}</div>{{end}}
+            <div id="auth-panel-signup" class="auth-panel{{if eq .AuthMode "login"}} hidden{{end}}">
+                <div class="auth-kicker">Optional account</div>
+                <h2 id="auth-title">Save your reading state</h2>
+                <p class="auth-copy">You can browse without an account. Sign up only if you want personal read and star tracking.</p>
+                <form method="post" action="/signup" class="auth-stack-form">
+                    <input type="hidden" name="next" value="{{.CurrentPath}}">
+                    <input type="text" name="username" class="auth-input" placeholder="Username" autocomplete="username" required>
+                    <input type="email" name="email" class="auth-input" placeholder="Email (optional)" autocomplete="email">
+                    <input type="password" name="password" class="auth-input" placeholder="Password (8+ chars)" autocomplete="new-password" required>
+                    <button type="submit" class="auth-btn auth-btn-primary">Create account</button>
+                </form>
+            </div>
+            <div id="auth-panel-login" class="auth-panel{{if ne .AuthMode "login"}} hidden{{end}}">
+                <div class="auth-kicker">Welcome back</div>
+                <h2>Continue where you left off</h2>
+                <p class="auth-copy">Log in with your username or email to recover your saved and read articles.</p>
+                <form method="post" action="/login" class="auth-stack-form">
+                    <input type="hidden" name="next" value="{{.CurrentPath}}">
+                    <input type="text" name="identifier" class="auth-input" placeholder="Username or email" autocomplete="username" required>
+                    <input type="password" name="password" class="auth-input" placeholder="Password" autocomplete="current-password" required>
+                    <button type="submit" class="auth-btn auth-btn-primary">Log in</button>
+                </form>
+            </div>
+            {{end}}
+        </div>
     </div>
 </body>
 </html>
