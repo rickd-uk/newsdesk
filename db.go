@@ -22,7 +22,10 @@ type Article struct {
 	Content     string
 	ScrapedAt   string
 	Read        bool
+	ReadAt      string
 	Favorited   bool
+	Archived    bool
+	Note        string
 }
 
 type QueryParams struct {
@@ -33,9 +36,12 @@ type QueryParams struct {
 	Author        string
 	DateFrom      string
 	DateTo        string
-	Fields        []string // "title","body","tags" — nil/empty means all
+	Fields        []string // "title","body","tags","notes" — nil/empty means all
 	HideRead      bool
+	ReadsOnly     bool
 	FavoritesOnly bool
+	ArchivedOnly  bool
+	HideNotes     bool
 	Offset        int
 	Limit         int
 }
@@ -71,6 +77,76 @@ func buildFTSQuery(fields []string, raw string) string {
 		return ""
 	}
 	return buildFTSPrefix(fields) + strings.Join(terms, " ")
+}
+
+func searchTerms(raw string) []string {
+	var terms []string
+	for _, term := range strings.FieldsFunc(raw, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		term = strings.TrimSpace(term)
+		if term != "" {
+			terms = append(terms, term)
+		}
+	}
+	return terms
+}
+
+func articleSearchFields(fields []string) ([]string, bool) {
+	if len(fields) == 0 {
+		return nil, true
+	}
+	valid := map[string]bool{"title": true, "body": true, "tags": true}
+	var out []string
+	for _, f := range fields {
+		if valid[f] {
+			out = append(out, f)
+		}
+	}
+	return out, len(out) > 0
+}
+
+func searchIncludesNotes(fields []string) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for _, f := range fields {
+		if f == "notes" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendSearchCondition(q string, args []interface{}, p QueryParams) (string, []interface{}, bool) {
+	raw := strings.TrimSpace(p.Q)
+	if raw == "" {
+		return q, args, true
+	}
+	terms := searchTerms(raw)
+	if len(terms) == 0 {
+		return q + " AND 0=1", args, false
+	}
+
+	var clauses []string
+	if fields, ok := articleSearchFields(p.Fields); ok {
+		if ftsQ := buildFTSQuery(fields, raw); ftsQ != "" {
+			clauses = append(clauses, "a.id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?)")
+			args = append(args, ftsQ)
+		}
+	}
+	if searchIncludesNotes(p.Fields) && p.UserID != 0 {
+		var noteClauses []string
+		for _, term := range terms {
+			noteClauses = append(noteClauses, "n.note LIKE ?")
+			args = append(args, "%"+term+"%")
+		}
+		clauses = append(clauses, "("+strings.Join(noteClauses, " AND ")+")")
+	}
+	if len(clauses) == 0 {
+		return q + " AND 0=1", args, false
+	}
+	return q + " AND (" + strings.Join(clauses, " OR ") + ")", args, true
 }
 
 type DB struct {
@@ -147,6 +223,41 @@ func (db *DB) InitFavoritesTable() error {
 	return db.initArticleStateTable("article_favorites", "favorited_at")
 }
 
+func (db *DB) InitArchivesTable() error {
+	return db.initArticleStateTable("article_archives", "archived_at")
+}
+
+func (db *DB) InitNotesTable() error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_notes (
+		user_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		note TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(user_id, article_id),
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_notes_article_id ON article_notes(article_id)`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_notes_user_updated ON article_notes(user_id, updated_at DESC)`)
+	return err
+}
+
+func (db *DB) SaveNote(userID, id int, note string) error {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		_, err := db.Exec(`DELETE FROM article_notes WHERE user_id = ? AND article_id = ?`, userID, id)
+		return err
+	}
+	_, err := db.Exec(`INSERT INTO article_notes(user_id, article_id, note, updated_at)
+		VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id, article_id) DO UPDATE SET note = excluded.note, updated_at = CURRENT_TIMESTAMP`,
+		userID, id, note)
+	return err
+}
+
 func (db *DB) MarkFavorite(userID, id int) error {
 	_, err := db.Exec(`INSERT OR IGNORE INTO article_favorites(user_id, article_id) VALUES(?, ?)`, userID, id)
 	return err
@@ -168,6 +279,16 @@ func (db *DB) MarkRead(userID, id int) error {
 
 func (db *DB) MarkUnread(userID, id int) error {
 	_, err := db.Exec(`DELETE FROM article_reads WHERE user_id = ? AND article_id = ?`, userID, id)
+	return err
+}
+
+func (db *DB) MarkArchived(userID, id int) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO article_archives(user_id, article_id) VALUES(?, ?)`, userID, id)
+	return err
+}
+
+func (db *DB) UnmarkArchived(userID, id int) error {
+	_, err := db.Exec(`DELETE FROM article_archives WHERE user_id = ? AND article_id = ?`, userID, id)
 	return err
 }
 
@@ -199,7 +320,10 @@ func (db *DB) initArticleStateTable(tableName, timestampCol string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_article_id ON %s(article_id)`, tableName, tableName))
+	if _, err = db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_article_id ON %s(article_id)`, tableName, tableName)); err != nil {
+		return err
+	}
+	_, err = db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_user_%s ON %s(user_id, %s DESC)`, tableName, timestampCol, tableName, timestampCol))
 	return err
 }
 
@@ -283,51 +407,18 @@ func (db *DB) GetCategoryInfos() ([]CategoryInfo, error) {
 
 func (db *DB) CountArticles(p QueryParams) (int, error) {
 	var count int
-	searchQ := strings.TrimSpace(p.Q)
-	if searchQ != "" {
-		ftsQ := buildFTSQuery(p.Fields, searchQ)
-		if ftsQ == "" {
-			return 0, nil
-		}
-		q := `SELECT COUNT(*) FROM articles_fts f
-		      JOIN articles a ON a.id = f.rowid
-		      LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
-		      LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
-		      WHERE articles_fts MATCH ?`
-		args := []interface{}{p.UserID, p.UserID, ftsQ}
-		if p.Site != "" {
-			q += " AND a.site = ?"
-			args = append(args, p.Site)
-		}
-		if p.Category != "" {
-			q += " AND a.category = ?"
-			args = append(args, p.Category)
-		}
-		if p.Author != "" {
-			q += " AND a.author LIKE ?"
-			args = append(args, "%"+p.Author+"%")
-		}
-		if p.DateFrom != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
-			args = append(args, p.DateFrom)
-		}
-		if p.DateTo != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
-			args = append(args, p.DateTo)
-		}
-		if p.HideRead {
-			q += " AND r.article_id IS NULL"
-		}
-		if p.FavoritesOnly {
-			q += " AND fav.article_id IS NOT NULL"
-		}
-		return count, db.QueryRow(q, args...).Scan(&count)
-	}
 	q := `SELECT COUNT(*) FROM articles a
 	      LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
 	      LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
+	      LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
+	      LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
 	      WHERE 1=1`
-	args := []interface{}{p.UserID, p.UserID}
+	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID}
+	var ok bool
+	q, args, ok = appendSearchCondition(q, args, p)
+	if !ok {
+		return 0, nil
+	}
 	if p.Site != "" {
 		q += " AND a.site = ?"
 		args = append(args, p.Site)
@@ -351,8 +442,16 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 	if p.HideRead {
 		q += " AND r.article_id IS NULL"
 	}
+	if p.ReadsOnly {
+		q += " AND r.article_id IS NOT NULL"
+	}
 	if p.FavoritesOnly {
 		q += " AND fav.article_id IS NOT NULL"
+	}
+	if p.ArchivedOnly {
+		q += " AND ar.article_id IS NOT NULL"
+	} else if p.UserID != 0 {
+		q += " AND ar.article_id IS NULL"
 	}
 	return count, db.QueryRow(q, args...).Scan(&count)
 }
@@ -371,6 +470,7 @@ type CategorySubGroup struct {
 
 type CategoryGroup struct {
 	Label     string
+	ShowLabel bool
 	Pills     []CategoryPill // direct children (no subgroup)
 	SubGroups []CategorySubGroup
 }
@@ -424,6 +524,8 @@ func BuildCategoryTree(cats []CategoryInfo) []CategoryGroup {
 		for _, sub := range g.subOrder {
 			cg.SubGroups = append(cg.SubGroups, *g.subMap[sub])
 		}
+		cg.ShowLabel = len(cg.SubGroups) > 0 || len(cg.Pills) > 1 ||
+			(len(cg.Pills) == 1 && !strings.EqualFold(cg.Label, cg.Pills[0].Label))
 		result = append(result, cg)
 	}
 	return result
@@ -440,100 +542,68 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 	if p.Limit <= 0 {
 		p.Limit = 20
 	}
-	var (
-		rows *sql.Rows
-		err  error
-	)
-
-	searchQ := strings.TrimSpace(p.Q)
-	if searchQ != "" {
-		ftsQ := buildFTSQuery(p.Fields, searchQ)
-		if ftsQ == "" {
-			return nil, nil
-		}
-		q := `SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
+	q := `SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
 			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
 			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
 			COALESCE(a.scraped_at,''),
 			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
-			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
-			FROM articles_fts f
-			JOIN articles a ON a.id = f.rowid
-			LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
-			LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
-			WHERE articles_fts MATCH ?`
-		args := []interface{}{p.UserID, p.UserID, ftsQ}
-		if p.Site != "" {
-			q += " AND a.site = ?"
-			args = append(args, p.Site)
-		}
-		if p.Category != "" {
-			q += " AND a.category = ?"
-			args = append(args, p.Category)
-		}
-		if p.Author != "" {
-			q += " AND a.author LIKE ?"
-			args = append(args, "%"+p.Author+"%")
-		}
-		if p.DateFrom != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
-			args = append(args, p.DateFrom)
-		}
-		if p.DateTo != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
-			args = append(args, p.DateTo)
-		}
-		if p.HideRead {
-			q += " AND r.article_id IS NULL"
-		}
-		if p.FavoritesOnly {
-			q += " AND fav.article_id IS NOT NULL"
-		}
-		q += " ORDER BY a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
-		args = append(args, p.Limit, p.Offset)
-		rows, err = db.Query(q, args...)
-	} else {
-		q := `SELECT COALESCE(a.id,0), COALESCE(a.site,''), COALESCE(a.url,''),
-			COALESCE(a.category,''), COALESCE(a.title,''), COALESCE(a.author,''),
-			COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
-			COALESCE(a.scraped_at,''),
-			CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
-			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
+			COALESCE(r.read_at,''),
+			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END,
+			CASE WHEN ar.article_id IS NOT NULL THEN 1 ELSE 0 END,
+			COALESCE(n.note, '')
 			FROM articles a
 			LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
 			LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
+			LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
+			LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
 			WHERE 1=1`
-		args := []interface{}{p.UserID, p.UserID}
-		if p.Site != "" {
-			q += " AND a.site = ?"
-			args = append(args, p.Site)
-		}
-		if p.Category != "" {
-			q += " AND a.category = ?"
-			args = append(args, p.Category)
-		}
-		if p.Author != "" {
-			q += " AND a.author LIKE ?"
-			args = append(args, "%"+p.Author+"%")
-		}
-		if p.DateFrom != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
-			args = append(args, p.DateFrom)
-		}
-		if p.DateTo != "" {
-			q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
-			args = append(args, p.DateTo)
-		}
-		if p.HideRead {
-			q += " AND r.article_id IS NULL"
-		}
-		if p.FavoritesOnly {
-			q += " AND fav.article_id IS NOT NULL"
-		}
-		q += " ORDER BY a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
-		args = append(args, p.Limit, p.Offset)
-		rows, err = db.Query(q, args...)
+	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID}
+	var ok bool
+	q, args, ok = appendSearchCondition(q, args, p)
+	if !ok {
+		return nil, nil
 	}
+	if p.Site != "" {
+		q += " AND a.site = ?"
+		args = append(args, p.Site)
+	}
+	if p.Category != "" {
+		q += " AND a.category = ?"
+		args = append(args, p.Category)
+	}
+	if p.Author != "" {
+		q += " AND a.author LIKE ?"
+		args = append(args, "%"+p.Author+"%")
+	}
+	if p.DateFrom != "" {
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
+		args = append(args, p.DateFrom)
+	}
+	if p.DateTo != "" {
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
+		args = append(args, p.DateTo)
+	}
+	if p.HideRead {
+		q += " AND r.article_id IS NULL"
+	}
+	if p.ReadsOnly {
+		q += " AND r.article_id IS NOT NULL"
+	}
+	if p.FavoritesOnly {
+		q += " AND fav.article_id IS NOT NULL"
+	}
+	if p.ArchivedOnly {
+		q += " AND ar.article_id IS NOT NULL"
+	} else if p.UserID != 0 {
+		q += " AND ar.article_id IS NULL"
+	}
+	if p.ReadsOnly {
+		q += " ORDER BY r.read_at DESC, a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
+	} else {
+		q += " ORDER BY a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
+	}
+	args = append(args, p.Limit, p.Offset)
+	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +614,7 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 		var a Article
 		if err := rows.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
 			&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
-			&a.Read, &a.Favorited); err != nil {
+			&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note); err != nil {
 			return nil, err
 		}
 		articles = append(articles, a)
@@ -558,15 +628,20 @@ func (db *DB) GetArticleByID(id, userID int) (*Article, error) {
 		COALESCE(a.publish_date,''), COALESCE(a.tags,''), COALESCE(a.content,''),
 		COALESCE(a.scraped_at,''),
 		CASE WHEN r.article_id IS NOT NULL THEN 1 ELSE 0 END,
-		CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END
+		COALESCE(r.read_at,''),
+		CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END,
+		CASE WHEN ar.article_id IS NOT NULL THEN 1 ELSE 0 END,
+		COALESCE(n.note, '')
 		FROM articles a
 		LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
 		LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
-		WHERE a.id = ?`, userID, userID, id)
+		LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
+		LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
+		WHERE a.id = ?`, userID, userID, userID, userID, id)
 	var a Article
 	if err := row.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
 		&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
-		&a.Read, &a.Favorited); err != nil {
+		&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note); err != nil {
 		return nil, err
 	}
 	return &a, nil

@@ -215,6 +215,42 @@ sudo certbot renew --dry-run
 
 Use this every time you push code changes.
 
+### One-command deploy
+
+From your local machine:
+
+```bash
+./deploy/push.sh
+```
+
+What it does:
+
+- `rsync`s the repo to `/opt/newsdesk` without overwriting the live SQLite DB
+- runs `go build -tags fts5 -o news-desk .` on the VPS
+- restarts the `newsdesk` systemd service
+- creates a one-time timestamped backup of `articles.db`, `articles.db-wal`, and `articles.db-shm` before the first auth-enabled startup migration
+
+By default the script connects to the SSH host alias `hz-hel`. Override it only if needed:
+
+Optional overrides:
+
+```bash
+NEWSDESK_HOST=rick@hz-hel \
+NEWSDESK_REMOTE_DIR=/opt/newsdesk \
+NEWSDESK_SERVICE=newsdesk \
+./deploy/push.sh
+```
+
+To replace the live database with your local `articles.db`:
+
+```bash
+./deploy/push-db.sh
+```
+
+### Manual workflow
+
+If you ever want to do it step by step, the old commands are still valid.
+
 **From your local machine:**
 
 ```bash

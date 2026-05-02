@@ -1,7 +1,12 @@
 {{define "modal"}}
-<div class="modal" data-article-id="{{.Article.ID}}" data-authenticated="{{if .CurrentUser}}1{{else}}0{{end}}">
+<div class="modal{{if .Article.Favorited}} is-favorite{{end}}{{if .Article.Read}} is-read{{end}}{{if .Article.Archived}} is-archived{{end}}" data-article-id="{{.Article.ID}}" data-authenticated="{{if .CurrentUser}}1{{else}}0{{end}}">
     <div class="modal-header">
         <div class="modal-title-group">
+            <div class="modal-state-row">
+                {{if .Article.Favorited}}<span class="modal-state-badge favorite" id="modal-fav-indicator">★ Favorite</span>{{end}}
+                {{if .Article.Read}}<span class="modal-state-badge read" id="modal-read-indicator">✓ Read</span>{{end}}
+                {{if .Article.Archived}}<span class="modal-state-badge archived" id="modal-archive-indicator">▣ Archived</span>{{end}}
+            </div>
             <h2 class="modal-title">{{.Article.Title}}</h2>
             <div class="modal-meta">
                 {{if .Article.Site}}<span class="badge site">{{.Article.Site}}</span>{{end}}
@@ -23,13 +28,29 @@
             <button class="size-btn" onclick="adjustSize(-1)">A&#x2212;</button>
             <button class="size-btn" onclick="adjustSize(1)">A+</button>
         </div>
-        <button class="copy-btn" id="copy-btn" onclick="copyContent()">Copy</button>
-        <button class="unread-btn" id="unread-btn" onclick="markUnread()" title="Mark as unread"{{if or (not .CurrentUser) (not .Article.Read)}} disabled{{end}}>↩</button>
-        <button class="fav-btn{{if .Article.Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Article.Favorited}}Unsave{{else}}Save{{end}}"{{if not .CurrentUser}} disabled{{end}}>{{if .Article.Favorited}}★{{else}}☆{{end}}</button>
-        {{if .Article.URL}}<a class="original-link" href="{{.Article.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
+        <div class="modal-actions">
+            <button class="copy-btn" id="copy-btn" onclick="copyContent()" title="Copy article">&#x2398;</button>
+            <button class="unread-btn" id="unread-btn" onclick="markUnread()" title="Mark as unread"{{if or (not .CurrentUser) (not .Article.Read)}} disabled{{end}}>↩</button>
+            <button class="fav-btn{{if .Article.Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Article.Favorited}}Unsave{{else}}Save{{end}}"{{if not .CurrentUser}} disabled{{end}}>{{if .Article.Favorited}}★{{else}}☆{{end}}</button>
+            <button class="archive-btn{{if .Article.Archived}} active{{end}}" id="archive-btn" onclick="toggleArchive()" title="{{if .Article.Archived}}Unarchive{{else}}Archive{{end}}"{{if not .CurrentUser}} disabled{{end}}>▣</button>
+            <button class="note-toggle-btn{{if .Article.Note}} active{{end}}" id="note-toggle-btn" onclick="toggleArticleNote()" title="{{if .Article.Note}}Hide note{{else}}Add note{{end}}"{{if not .CurrentUser}} disabled{{end}}>✎</button>
+            {{if .Article.URL}}<a class="original-link" href="{{.Article.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
+        </div>
     </div>
     {{if not .CurrentUser}}
-    <div class="auth-note">Sign up or log in to track reads and saved articles.</div>
+    <div class="auth-note">Sign up or log in to track reads, saved articles, and notes.</div>
+    {{else}}
+    <div class="note-panel{{if not .Article.Note}} hidden{{end}}" id="note-panel">
+        <div class="note-panel-head">
+            <span class="label">Note</span>
+            <span class="note-save-status" id="note-save-status"></span>
+        </div>
+        <textarea id="article-note-input" class="note-input" placeholder="Add a private note...">{{.Article.Note}}</textarea>
+        <div class="note-actions">
+            <button class="note-save-btn" type="button" onclick="saveArticleNote()">Save note</button>
+            <button class="note-clear-btn" type="button" onclick="clearArticleNote()"{{if not .Article.Note}} disabled{{end}}>Clear</button>
+        </div>
+    </div>
     {{end}}
     <div class="modal-body" id="article-content">
         {{range splitParagraphs .Article.Content}}

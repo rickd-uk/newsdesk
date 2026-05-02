@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 )
 
 //go:embed templates static
@@ -15,6 +17,7 @@ var embeddedFiles embed.FS
 func main() {
 	dbPath := flag.String("db", "articles.db", "Path to SQLite database")
 	addr := flag.String("addr", ":8080", "Address to listen on")
+	allowSignups := flag.Bool("allow-signups", envBool("NEWSDESK_ALLOW_SIGNUPS"), "Allow new user signup")
 	flag.Parse()
 
 	db, err := OpenDB(*dbPath)
@@ -38,13 +41,19 @@ func main() {
 	if err := db.InitFavoritesTable(); err != nil {
 		log.Fatalf("init favorites table: %v", err)
 	}
+	if err := db.InitArchivesTable(); err != nil {
+		log.Fatalf("init archives table: %v", err)
+	}
+	if err := db.InitNotesTable(); err != nil {
+		log.Fatalf("init notes table: %v", err)
+	}
 
 	tmpl, err := mustParseTemplatesFS(embeddedFiles)
 	if err != nil {
 		log.Fatalf("parse templates: %v", err)
 	}
 
-	srv := &Server{db: db, tmpl: tmpl}
+	srv := &Server{db: db, tmpl: tmpl, signupEnabled: *allowSignups}
 
 	staticFS, _ := fs.Sub(embeddedFiles, "static")
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
@@ -57,4 +66,13 @@ func main() {
 
 	fmt.Printf("article-viewer listening on %s\n", *addr)
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }

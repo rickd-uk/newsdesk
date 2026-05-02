@@ -1,0 +1,211 @@
+Newsdesk session handoff
+Updated: 2026-04-30
+
+Project summary
+- Go + SQLite article browser with HTMX frontend.
+- Anonymous users can browse and search freely.
+- Optional accounts now support per-user read tracking and favorites.
+- Auth uses required username, optional email, cookie sessions.
+
+What was implemented
+- Added auth backend in auth.go.
+- Added users and user_sessions tables.
+- Converted article_reads and article_favorites from global state to per-user state.
+- Added migration behavior:
+  - article_reads -> article_reads_legacy_global
+  - article_favorites -> article_favorites_legacy_global
+- Added signup/login/logout routes.
+- Login accepts username or email.
+- Reworked auth UI into a modal instead of inline top-bar inputs.
+- Adjusted modal tab sizing and close button styling.
+
+Important files
+- auth.go
+- db.go
+- handlers.go
+- main.go
+- templates/index.html
+- templates/partials/modal.html
+- static/app.js
+- static/style.css
+- deploy/push.sh
+- deploy/remote-restart.sh
+- deploy/push-db.sh
+- docs/AUTH-DEPLOYMENT-GUIDE.md
+
+Deploy workflow
+- Code deploy:
+  - ./deploy/push.sh
+- DB deploy:
+  - ./deploy/push-db.sh
+
+Current VPS assumptions
+- SSH host alias: hz-hel
+- App dir: /opt/newsdesk
+- Service: newsdesk
+- App bind: 127.0.0.1:8181
+- Nginx proxies public traffic to the app
+
+Important deployment behavior
+- push.sh does NOT copy the live SQLite DB.
+- push-db.sh is for replacing the live DB with local articles.db.
+- sudo password prompt during deploy is expected and intentionally kept.
+- push.sh defaults to SSH host alias: hz-hel
+- push.sh uses ssh -t so sudo prompts work during deploy
+
+Live deployment issue encountered
+- Service repeatedly failed with:
+  - init users table: attempt to write a readonly database
+- Root cause:
+  - SQLite WAL mode needs write access to:
+    - /opt/newsdesk
+    - articles.db
+    - articles.db-wal
+    - articles.db-shm
+- Manual fix that worked:
+  - sudo systemctl stop newsdesk
+  - sudo chown rick:www-data /opt/newsdesk
+  - sudo chmod 775 /opt/newsdesk
+  - sudo chown www-data:www-data articles.db
+  - sudo chmod 664 articles.db
+  - sudo chown www-data:www-data articles.db-wal articles.db-shm 2>/dev/null || true
+  - sudo chmod 664 articles.db-wal articles.db-shm 2>/dev/null || true
+  - sudo systemctl start newsdesk
+
+Current script status
+- deploy/remote-restart.sh was updated to fix:
+  - /opt/newsdesk permissions
+  - articles.db permissions
+  - articles.db-wal permissions
+  - articles.db-shm permissions
+- deploy/push.sh now:
+  - defaults to hz-hel
+  - uses ssh -t for sudo prompt
+  - excludes .bak DB sidecar files
+- deploy/push-db.sh now:
+  - uploads local articles.db to articles.db.new
+  - stops newsdesk
+  - rotates current DB into timestamped pre-sync backups
+  - fixes /opt/newsdesk permissions
+  - replaces articles.db
+  - removes stale articles.db-wal and articles.db-shm
+  - restarts newsdesk
+  - prints service status
+
+Backup retention
+- Both deploy scripts now prune old backup files automatically.
+- Default retention is 3 generations.
+- Override with:
+  - NEWSDESK_BACKUP_KEEP=5 ./deploy/push.sh
+  - NEWSDESK_BACKUP_KEEP=5 ./deploy/push-db.sh
+
+Recent operational result
+- Live VPS service recovered successfully.
+- Journal confirmed:
+  - migrated legacy global table article_reads to article_reads_legacy_global
+  - migrated legacy global table article_favorites to article_favorites_legacy_global
+  - article-viewer listening on 127.0.0.1:8181
+- A later DB swap reintroduced readonly/stale-sidecar problems, and deploy/push-db.sh was hardened to handle that path automatically.
+
+2026-04-29/30 anonymous scroll fix
+- User reported: when not logged in, the newsdesk feed could not scroll to see more articles.
+- Investigation:
+  - Anonymous users still receive paginated cards and the HTMX scroll sentinel.
+  - The issue was client-side scroll locking, not server-side pagination/auth filtering.
+  - static/app.js had multiple direct writes to document.body.style.overflow for auth modal, article modal, and filter drawer.
+  - The filter panel could leave the body locked even when the page should be scrollable.
+- Fix:
+  - Added filterDrawerLocksPage() and updateBodyScrollLock() in static/app.js.
+  - Modal/auth/filter close/open paths now call updateBodyScrollLock() instead of assigning overflow directly.
+  - Body scroll only locks for:
+    - open article modal
+    - open auth modal
+    - open mobile filter drawer at max-width 600px
+  - Added resize listener so desktop/mobile transitions recompute the lock.
+- Verification:
+  - node --check static/app.js
+  - env GOCACHE=/tmp/go-build-cache-newsdesk go test -tags fts5 ./...
+- Note:
+  - The repo already had many unrelated uncommitted changes before this fix.
+  - The scroll fix only touched static/app.js.
+
+Useful commands
+- Local tests:
+  - env GOCACHE=/tmp/go-build-cache go test -tags fts5 ./...
+- VPS logs:
+  - sudo journalctl -u newsdesk -n 100 --no-pager -l
+- VPS service status:
+  - sudo systemctl status newsdesk --no-pager -l
+- Local upstream check on VPS:
+  - curl -I http://127.0.0.1:8181/
+
+Docs added
+- docs/AUTH-DEPLOYMENT-GUIDE.md contains the full auth/deploy/troubleshooting guide.
+
+Resume point
+- App/auth code is in good shape and tests passed locally.
+- Deploy scripts are now in decent shape for code deploy and DB sync.
+- Latest local bug fix is the anonymous scroll-lock fix in static/app.js.
+- Main next-step, if needed, would be deploy/test in a real browser on mobile and desktop.
+
+2026-05-01 current session updates
+- Implemented private-mode access:
+  - Anonymous users can no longer view articles.
+  - / now renders a login-only page when logged out.
+  - /articles and /article/... return 401 without a valid session.
+  - Search/filter/article UI is not rendered for logged-out users.
+- Disabled new signups by default:
+  - Enable temporarily with CLI flag:
+    - -allow-signups
+  - Or systemd/env:
+    - NEWSDESK_ALLOW_SIGNUPS=1
+  - README.md now documents the signup toggle.
+- VPS signup toggle instructions:
+  - sudo systemctl edit newsdesk
+  - Add above the discard line:
+    - [Service]
+    - Environment=NEWSDESK_ALLOW_SIGNUPS=1
+  - sudo systemctl daemon-reload
+  - sudo systemctl restart newsdesk
+  - After account creation:
+    - sudo systemctl revert newsdesk
+    - sudo systemctl daemon-reload
+    - sudo systemctl restart newsdesk
+- VPS auth/login status:
+  - Local articles.db had zero users when checked.
+  - If VPS login fails with a known password, likely causes are:
+    - VPS DB has no users.
+    - VPS is using a different DB than expected.
+    - Username changed during email-only migration to lowercased email.
+  - Useful VPS check:
+    - sqlite3 /opt/newsdesk/articles.db "SELECT id, username, COALESCE(email, ''), created_at FROM users;"
+- VPS 502 investigation:
+  - newsdesk service was active and listening on 127.0.0.1:8181.
+  - nginx error showed connect() failed at 21:48:36 UTC while app was still starting.
+  - app logged listening at 21:48:39 UTC.
+  - Subsequent checks returned 200 OK:
+    - curl -i http://127.0.0.1:8181/
+    - curl -I https://newsdesk.rickd.dev/
+  - Conclusion: 502 was transient during restart/startup.
+- Article notes feature:
+  - Added user-scoped article_notes table.
+  - Notes can be saved/cleared per article and per user.
+  - Notes can be searched via the Notes search field.
+  - Notes can be hidden from article cards with Hide notes.
+  - Added modal note editor.
+  - Later changed modal note editor to be hidden by default unless article already has a note.
+  - Added pencil toolbar button to show/hide the note editor.
+- Modal UI updates:
+  - Made modal close X larger with a bigger hit target.
+  - Added note toggle button styling.
+- Category UI fix:
+  - Fixed duplicated flat category labels like "Business: business" and "Crime: crime".
+  - Added server-side ShowLabel logic for category groups.
+  - Added client-side label hiding after site filtering, because category groups are built across all sites and then hidden in JS.
+- Verification used repeatedly:
+  - env GOCACHE=/tmp/go-build-cache-newsdesk go test -tags fts5 ./...
+- Deployment note:
+  - A deploy attempt with ./deploy/push.sh failed because SSH security-key auth was refused:
+    - sign_and_send_pubkey: signing failed for ED25519-SK ... agent refused operation
+    - Permission denied (publickey)
+  - Need SSH auth/key presence fixed before automated deploy can work again.

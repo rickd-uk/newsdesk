@@ -14,8 +14,9 @@ import (
 const pageSize = 20
 
 type Server struct {
-	db   *DB
-	tmpl *template.Template
+	db            *DB
+	tmpl          *template.Template
+	signupEnabled bool
 }
 
 type PageData struct {
@@ -24,6 +25,7 @@ type PageData struct {
 	CurrentUser    *User
 	AuthError      string
 	AuthMode       string
+	SignupEnabled  bool
 	CurrentPath    string
 	Q              string
 	Author         string
@@ -32,10 +34,14 @@ type PageData struct {
 	SearchTitle    bool
 	SearchBody     bool
 	SearchTags     bool
+	SearchNotes    bool
 	SelectedSite   string
 	SelectedCat    string
 	HideRead       bool
+	ReadsOnly      bool
 	FavoritesOnly  bool
+	ArchivedOnly   bool
+	HideNotes      bool
 	Cards          CardsData
 }
 
@@ -50,7 +56,10 @@ type CardsData struct {
 	Site          string
 	Category      string
 	HideRead      bool
+	ReadsOnly     bool
 	FavoritesOnly bool
+	ArchivedOnly  bool
+	HideNotes     bool
 	NextOffset    int
 	HasMore       bool
 }
@@ -150,8 +159,17 @@ func buildFuncMap() template.FuncMap {
 			if d.HideRead {
 				params.Set("hide_read", "1")
 			}
+			if d.ReadsOnly {
+				params.Set("reads_only", "1")
+			}
 			if d.FavoritesOnly {
 				params.Set("favorites_only", "1")
+			}
+			if d.ArchivedOnly {
+				params.Set("archived_only", "1")
+			}
+			if d.HideNotes {
+				params.Set("hide_notes", "1")
 			}
 			params.Set("offset", strconv.Itoa(d.NextOffset))
 			return template.URL("/articles?" + params.Encode())
@@ -189,6 +207,23 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
 	}
+	if user == nil {
+		mode := r.URL.Query().Get("auth_mode")
+		if mode == "" || !s.signupEnabled {
+			mode = "login"
+		}
+		data := PageData{
+			CurrentUser:   nil,
+			AuthError:     r.URL.Query().Get("auth_error"),
+			AuthMode:      mode,
+			SignupEnabled: s.signupEnabled,
+			CurrentPath:   currentPath(r),
+		}
+		if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
+			log.Printf("execute index.html: %v", err)
+		}
+		return
+	}
 	q := r.URL.Query().Get("q")
 	site := r.URL.Query().Get("site")
 	cat := r.URL.Query().Get("category")
@@ -197,7 +232,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	dateTo := r.URL.Query().Get("date_to")
 	fields := parseFields(r)
 	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
+	readsOnly := user != nil && r.URL.Query().Get("reads_only") == "1"
 	favoritesOnly := user != nil && r.URL.Query().Get("favorites_only") == "1"
+	archivedOnly := user != nil && r.URL.Query().Get("archived_only") == "1"
+	hideNotes := user != nil && r.URL.Query().Get("hide_notes") == "1"
+	if readsOnly {
+		hideRead = false
+	}
 
 	userID := 0
 	if user != nil {
@@ -208,14 +249,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		UserID: userID,
 		Q:      q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
-		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly,
+		Fields: fields, HideRead: hideRead, ReadsOnly: readsOnly,
+		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes,
 	}
 	sites, _ := s.db.GetSites()
 	catInfos, _ := s.db.GetCategoryInfos()
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: 0,
-		Q: qp.Q, Site: qp.Site, Category: qp.Category,
+		UserID: qp.UserID,
+		Q:      qp.Q, Site: qp.Site, Category: qp.Category,
 		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
-		Fields: qp.Fields, HideRead: qp.HideRead, FavoritesOnly: qp.FavoritesOnly})
+		Fields: qp.Fields, HideRead: qp.HideRead, ReadsOnly: qp.ReadsOnly,
+		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes})
 	total, _ := s.db.CountArticles(qp)
 
 	data := PageData{
@@ -224,6 +268,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		CurrentUser:    user,
 		AuthError:      r.URL.Query().Get("auth_error"),
 		AuthMode:       r.URL.Query().Get("auth_mode"),
+		SignupEnabled:  s.signupEnabled,
 		CurrentPath:    currentPath(r),
 		Q:              q,
 		Author:         author,
@@ -232,10 +277,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		SearchTitle:    hasField(fields, "title"),
 		SearchBody:     hasField(fields, "body"),
 		SearchTags:     hasField(fields, "tags"),
+		SearchNotes:    hasField(fields, "notes"),
 		SelectedSite:   site,
 		SelectedCat:    cat,
 		HideRead:       hideRead,
+		ReadsOnly:      readsOnly,
 		FavoritesOnly:  favoritesOnly,
+		ArchivedOnly:   archivedOnly,
+		HideNotes:      hideNotes,
 		Cards: CardsData{
 			Articles:      articles,
 			TotalCount:    total,
@@ -247,7 +296,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Site:          site,
 			Category:      cat,
 			HideRead:      hideRead,
+			ReadsOnly:     readsOnly,
 			FavoritesOnly: favoritesOnly,
+			ArchivedOnly:  archivedOnly,
+			HideNotes:     hideNotes,
 			NextOffset:    pageSize,
 			HasMore:       len(articles) == pageSize,
 		},
@@ -258,9 +310,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
-	user, err := s.currentUser(r)
-	if err != nil {
-		http.Error(w, "session error", http.StatusInternalServerError)
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return
 	}
 	q := r.URL.Query().Get("q")
@@ -272,7 +323,13 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	fields := parseFields(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
+	readsOnly := user != nil && r.URL.Query().Get("reads_only") == "1"
 	favoritesOnly := user != nil && r.URL.Query().Get("favorites_only") == "1"
+	archivedOnly := user != nil && r.URL.Query().Get("archived_only") == "1"
+	hideNotes := user != nil && r.URL.Query().Get("hide_notes") == "1"
+	if readsOnly {
+		hideRead = false
+	}
 
 	userID := 0
 	if user != nil {
@@ -280,11 +337,14 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	}
 	qp := QueryParams{UserID: userID, Q: q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
-		Fields: fields, HideRead: hideRead, FavoritesOnly: favoritesOnly}
+		Fields: fields, HideRead: hideRead, ReadsOnly: readsOnly,
+		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes}
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: offset,
-		Q: qp.Q, Site: qp.Site, Category: qp.Category,
+		UserID: qp.UserID,
+		Q:      qp.Q, Site: qp.Site, Category: qp.Category,
 		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
-		Fields: qp.Fields, HideRead: qp.HideRead, FavoritesOnly: qp.FavoritesOnly})
+		Fields: qp.Fields, HideRead: qp.HideRead, ReadsOnly: qp.ReadsOnly,
+		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes})
 	total, _ := s.db.CountArticles(qp)
 
 	if offset == 0 {
@@ -313,8 +373,17 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		if hideRead {
 			params.Set("hide_read", "1")
 		}
+		if readsOnly {
+			params.Set("reads_only", "1")
+		}
 		if favoritesOnly {
 			params.Set("favorites_only", "1")
+		}
+		if archivedOnly {
+			params.Set("archived_only", "1")
+		}
+		if hideNotes {
+			params.Set("hide_notes", "1")
 		}
 		pushURL := "/"
 		if len(params) > 0 {
@@ -334,7 +403,10 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		Site:          site,
 		Category:      cat,
 		HideRead:      hideRead,
+		ReadsOnly:     readsOnly,
 		FavoritesOnly: favoritesOnly,
+		ArchivedOnly:  archivedOnly,
+		HideNotes:     hideNotes,
 		NextOffset:    offset + pageSize,
 		HasMore:       len(articles) == pageSize,
 	}
@@ -354,15 +426,20 @@ func (s *Server) handleArticleDispatch(w http.ResponseWriter, r *http.Request) {
 		s.handleMarkFavorite(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/unfavorite"):
 		s.handleUnmarkFavorite(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/archive"):
+		s.handleMarkArchived(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/unarchive"):
+		s.handleUnmarkArchived(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/note"):
+		s.handleSaveNote(w, r)
 	default:
 		s.handleArticle(w, r)
 	}
 }
 
 func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
-	user, err := s.currentUser(r)
-	if err != nil {
-		http.Error(w, "session error", http.StatusInternalServerError)
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return
 	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/article/")
@@ -445,9 +522,65 @@ func (s *Server) handleUnmarkFavorite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleMarkArchived(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/archive")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	s.db.MarkArchived(user.ID, id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUnmarkArchived(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/unarchive")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	s.db.UnmarkArchived(user.ID, id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/note")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.SaveNote(user.ID, id, r.FormValue("note")); err != nil {
+		http.Error(w, "save note failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.signupEnabled {
+		http.Error(w, "signups disabled", http.StatusForbidden)
 		return
 	}
 	if err := r.ParseForm(); err != nil {

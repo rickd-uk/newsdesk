@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Article Viewer</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js" defer></script>
     <script src="/static/app.js" defer></script>
@@ -11,6 +12,7 @@
 <body>
     <header id="top-bar">
         <div class="top-inner">
+            {{if .CurrentUser}}
             <button id="filter-btn" class="filter-btn" type="button" onclick="toggleFilters()" title="Filters">
                 &#9776;
                 <span id="filter-badge" class="filter-badge" hidden></span>
@@ -32,24 +34,25 @@
                 <button type="button" class="clear-btn" onclick="clearInput('search-input')" title="Clear search">&#x2715;</button>
             </div>
             <button id="view-btn" class="filter-btn" type="button" onclick="toggleCompact()" title="Toggle compact view">&#9783;</button>
-            {{if .CurrentUser}}
             <div class="account-chip">
                 <button type="button" class="auth-trigger auth-trigger-user" onclick="openAuthModal('account')">{{.CurrentUser.Username}}</button>
             </div>
             {{else}}
-            <button type="button" class="auth-trigger" onclick="openAuthModal('signup')">Sign up / Log in</button>
+            <div class="app-title">Article Viewer</div>
+            <button type="button" class="auth-trigger" onclick="openAuthModal('login')">{{if .SignupEnabled}}Sign up / Log in{{else}}Log in{{end}}</button>
             {{end}}
         </div>
         <div class="auth-row">
             {{if .CurrentUser}}
             <div class="auth-status">Browsing as <strong>{{.CurrentUser.Username}}</strong>{{if .CurrentUser.Email}} · {{.CurrentUser.Email}}{{end}}</div>
             {{else}}
-            <div class="auth-status">Search and read freely. Create an account only if you want saved and read tracking.</div>
+            <div class="auth-status">Log in to view articles.</div>
             {{end}}
         </div>
 
     </header>
 
+    {{if .CurrentUser}}
     <div id="filter-panel">
         <button class="drawer-close-btn" onclick="toggleFilters()" title="Close">&#x2715;</button>
         <input type="hidden" id="site-filter" name="site" value="{{.SelectedSite}}">
@@ -57,6 +60,21 @@
 
         <div class="filter-section">
             <div class="filter-section-label">Site</div>
+            <div class="site-mobile-picker">
+                <button type="button" class="site-all-btn" onclick="selectMobileSite('')">All sites</button>
+                <div class="site-combobox">
+                    <input
+                        type="search"
+                        id="site-search"
+                        class="filter-text-input site-search-input"
+                        value="{{.SelectedSite}}"
+                        placeholder="Find a site&#x2026;"
+                        autocomplete="off"
+                        aria-label="Find a site"
+                    >
+                    <div id="site-options-menu" class="site-options-menu" hidden></div>
+                </div>
+            </div>
             <div class="pills" id="site-pills">
                 {{range .Sites}}
                 <button type="button"
@@ -67,12 +85,14 @@
             </div>
         </div>
 
-        <div class="filter-section">
+        <div class="filter-section" id="category-section"{{if not .SelectedSite}} hidden{{end}}>
             <div class="filter-section-label">Category</div>
             <div id="cat-pills">
                 {{range .CategoryGroups}}
                 <div class="cat-group">
+                    {{if .ShowLabel}}
                     <span class="cat-group-label">{{.Label}}:</span>
+                    {{end}}
                     {{range .Pills}}
                     <button type="button"
                             class="pill pill-cat{{if eq $.SelectedCat .Value}} active{{end}}"
@@ -110,6 +130,9 @@
                     <label class="check-label">
                         <input type="checkbox" name="fields" value="tags" onchange="fireFeedRefresh()"{{if .SearchTags}} checked{{end}}> Tags
                     </label>
+                    <label class="check-label">
+                        <input type="checkbox" name="fields" value="notes" onchange="fireFeedRefresh()"{{if .SearchNotes}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Notes
+                    </label>
                 </div>
             </div>
             <div class="filter-inline-group">
@@ -118,6 +141,9 @@
                     <label class="check-label">
                         <input type="checkbox" name="hide_read" value="1" onchange="fireFeedRefresh()"{{if .HideRead}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Hide read
                     </label>
+                    <label class="check-label">
+                        <input type="checkbox" name="reads_only" value="1" onchange="fireFeedRefresh()"{{if .ReadsOnly}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Latest reads
+                    </label>
                 </div>
             </div>
             <div class="filter-inline-group">
@@ -125,6 +151,22 @@
                 <div class="filter-row">
                     <label class="check-label">
                         <input type="checkbox" name="favorites_only" value="1" onchange="fireFeedRefresh()"{{if .FavoritesOnly}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> ★ Only
+                    </label>
+                </div>
+            </div>
+            <div class="filter-inline-group">
+                <div class="filter-section-label">Notes</div>
+                <div class="filter-row">
+                    <label class="check-label">
+                        <input type="checkbox" name="hide_notes" value="1" onchange="fireFeedRefresh()"{{if .HideNotes}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Hide notes
+                    </label>
+                </div>
+            </div>
+            <div class="filter-inline-group">
+                <div class="filter-section-label">Archive</div>
+                <div class="filter-row">
+                    <label class="check-label">
+                        <input type="checkbox" name="archived_only" value="1" onchange="fireFeedRefresh()"{{if .ArchivedOnly}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Archived
                     </label>
                 </div>
             </div>
@@ -153,7 +195,7 @@
                             <input type="date" id="date-to" name="date_to" class="filter-text-input filter-date"
                                    value="{{.DateTo}}" onchange="fireFeedRefresh()">
                         </div>
-                        <button type="button" class="date-clear-btn" onclick="clearDates()" title="Clear dates">&#x2715; Clear</button>
+                        <button type="button" class="date-clear-btn" onclick="clearDates()" title="Reset dates">&#x2715; Reset</button>
                     </div>
                 </div>
             </div>
@@ -172,12 +214,15 @@
     <div id="search-suggestions" class="suggestions-drop" hidden></div>
 
     <div id="filter-backdrop" onclick="toggleFilters()"></div>
+    {{else}}
+    <main class="auth-only-main"></main>
+    {{end}}
 
     <div id="modal-overlay">
         <div id="modal-container"></div>
     </div>
 
-    <div id="auth-overlay" class="{{if or .AuthError .AuthMode}}preopen{{end}}" onclick="handleAuthOverlayClick(event)">
+    <div id="auth-overlay" class="{{if or (not .CurrentUser) .AuthError .AuthMode}}preopen{{end}}" onclick="handleAuthOverlayClick(event)">
         <div id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
             <button class="auth-close-btn" type="button" onclick="closeAuthModal()" title="Close">&#x2715;</button>
             {{if .CurrentUser}}
@@ -192,15 +237,18 @@
                 </form>
             </div>
             {{else}}
+            {{if .SignupEnabled}}
             <div class="auth-tabs">
                 <button type="button" id="auth-tab-signup" class="auth-tab{{if ne .AuthMode "login"}} active{{end}}" onclick="setAuthMode('signup')">✦ Sign up</button>
                 <button type="button" id="auth-tab-login" class="auth-tab{{if eq .AuthMode "login"}} active{{end}}" onclick="setAuthMode('login')">↪ Log in</button>
             </div>
+            {{end}}
             {{if .AuthError}}<div class="auth-error">{{.AuthError}}</div>{{end}}
+            {{if .SignupEnabled}}
             <div id="auth-panel-signup" class="auth-panel{{if eq .AuthMode "login"}} hidden{{end}}">
                 <div class="auth-kicker">Optional account</div>
                 <h2 id="auth-title">Save your reading state</h2>
-                <p class="auth-copy">You can browse without an account. Sign up only if you want personal read and star tracking.</p>
+                <p class="auth-copy">Create an account to read articles and keep your saved state.</p>
                 <form method="post" action="/signup" class="auth-stack-form">
                     <input type="hidden" name="next" value="{{.CurrentPath}}">
                     <input type="text" name="username" class="auth-input" placeholder="Username" autocomplete="username" required>
@@ -209,10 +257,11 @@
                     <button type="submit" class="auth-btn auth-btn-primary">Create account</button>
                 </form>
             </div>
-            <div id="auth-panel-login" class="auth-panel{{if ne .AuthMode "login"}} hidden{{end}}">
+            {{end}}
+            <div id="auth-panel-login" class="auth-panel{{if and .SignupEnabled (ne .AuthMode "login")}} hidden{{end}}">
                 <div class="auth-kicker">Welcome back</div>
-                <h2>Continue where you left off</h2>
-                <p class="auth-copy">Log in with your username or email to recover your saved and read articles.</p>
+                <h2 id="{{if not .SignupEnabled}}auth-title{{end}}">Log in to continue</h2>
+                <p class="auth-copy">Log in with your username or email to view articles.</p>
                 <form method="post" action="/login" class="auth-stack-form">
                     <input type="hidden" name="next" value="{{.CurrentPath}}">
                     <input type="text" name="identifier" class="auth-input" placeholder="Username or email" autocomplete="username" required>

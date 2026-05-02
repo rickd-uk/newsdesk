@@ -43,6 +43,12 @@ func testDB(t *testing.T) *DB {
 	if err := db.InitFavoritesTable(); err != nil {
 		t.Fatalf("InitFavoritesTable: %v", err)
 	}
+	if err := db.InitArchivesTable(); err != nil {
+		t.Fatalf("InitArchivesTable: %v", err)
+	}
+	if err := db.InitNotesTable(); err != nil {
+		t.Fatalf("InitNotesTable: %v", err)
+	}
 	return db
 }
 
@@ -76,6 +82,36 @@ func TestGetCategoryInfos(t *testing.T) {
 	}
 	if len(cats) != 3 {
 		t.Fatalf("want 3 categories, got %d: %v", len(cats), cats)
+	}
+}
+
+func TestBuildCategoryTree_HidesDuplicateFlatGroupLabels(t *testing.T) {
+	groups := BuildCategoryTree([]CategoryInfo{
+		{Name: "crime", Sites: "Japan Today"},
+		{Name: "business_economy", Sites: "Example"},
+	})
+	if len(groups) != 2 {
+		t.Fatalf("want 2 groups, got %#v", groups)
+	}
+
+	flatSeen := false
+	nestedSeen := false
+	for _, group := range groups {
+		if group.Label == "Crime" && len(group.Pills) == 1 && group.Pills[0].Label == "crime" {
+			flatSeen = true
+			if group.ShowLabel {
+				t.Fatalf("flat duplicate category should hide group label: %#v", group)
+			}
+		}
+		if group.Label == "Business" && len(group.Pills) == 1 && group.Pills[0].Label == "economy" {
+			nestedSeen = true
+			if !group.ShowLabel {
+				t.Fatalf("hierarchical category should show group label: %#v", group)
+			}
+		}
+	}
+	if !flatSeen || !nestedSeen {
+		t.Fatalf("did not find expected flat/nested business cases: %#v", groups)
 	}
 }
 
@@ -189,6 +225,12 @@ func TestInitFTSRebuildsStaleIndex(t *testing.T) {
 	if err := db.InitFavoritesTable(); err != nil {
 		t.Fatalf("InitFavoritesTable: %v", err)
 	}
+	if err := db.InitArchivesTable(); err != nil {
+		t.Fatalf("InitArchivesTable: %v", err)
+	}
+	if err := db.InitNotesTable(); err != nil {
+		t.Fatalf("InitNotesTable: %v", err)
+	}
 	arts, err := db.QueryArticles(QueryParams{Q: "fresh ars", Limit: 20})
 	if err != nil {
 		t.Fatalf("QueryArticles search: %v", err)
@@ -285,5 +327,145 @@ func TestQueryArticles_ReadAndFavoriteAreUserScoped(t *testing.T) {
 	}
 	if gotB == nil || gotB.Read || gotB.Favorited {
 		t.Fatalf("user B should not inherit user A state, got %#v", gotB)
+	}
+}
+
+func TestQueryArticles_ReadsOnlyOrdersByReadAt(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	user := testUser(t, db, "reader")
+	if err := db.MarkRead(user.ID, 1); err != nil {
+		t.Fatalf("MarkRead 1: %v", err)
+	}
+	if err := db.MarkRead(user.ID, 3); err != nil {
+		t.Fatalf("MarkRead 3: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE article_reads SET read_at = ? WHERE user_id = ? AND article_id = ?`, "2026-04-20 10:00:00", user.ID, 1); err != nil {
+		t.Fatalf("set read_at 1: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE article_reads SET read_at = ? WHERE user_id = ? AND article_id = ?`, "2026-04-21 10:00:00", user.ID, 3); err != nil {
+		t.Fatalf("set read_at 3: %v", err)
+	}
+
+	arts, err := db.QueryArticles(QueryParams{UserID: user.ID, ReadsOnly: true, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles ReadsOnly: %v", err)
+	}
+	if len(arts) != 2 {
+		t.Fatalf("want 2 read articles, got %d", len(arts))
+	}
+	if arts[0].ID != 3 || arts[0].ReadAt != "2026-04-21 10:00:00" {
+		t.Fatalf("want latest read first, got %#v", arts[0])
+	}
+	if arts[1].ID != 1 || arts[1].ReadAt != "2026-04-20 10:00:00" {
+		t.Fatalf("want older read second, got %#v", arts[1])
+	}
+}
+
+func TestQueryArticles_ArchiveHidesFromDefaultAndShowsArchivedOnly(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	user := testUser(t, db, "archiver")
+	if err := db.MarkArchived(user.ID, 1); err != nil {
+		t.Fatalf("MarkArchived: %v", err)
+	}
+
+	active, err := db.QueryArticles(QueryParams{UserID: user.ID, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles active: %v", err)
+	}
+	for _, a := range active {
+		if a.ID == 1 {
+			t.Fatalf("archived article should be hidden from default feed, got %#v", a)
+		}
+	}
+
+	archived, err := db.QueryArticles(QueryParams{UserID: user.ID, ArchivedOnly: true, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles archived: %v", err)
+	}
+	if len(archived) != 1 || archived[0].ID != 1 || !archived[0].Archived {
+		t.Fatalf("want only archived article 1, got %#v", archived)
+	}
+
+	if err := db.UnmarkArchived(user.ID, 1); err != nil {
+		t.Fatalf("UnmarkArchived: %v", err)
+	}
+	active, err = db.QueryArticles(QueryParams{UserID: user.ID, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles after unarchive: %v", err)
+	}
+	found := false
+	for _, a := range active {
+		if a.ID == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unarchived article should return to default feed")
+	}
+}
+
+func TestArticleNotesAreUserScopedAndSearchable(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	userA := testUser(t, db, "notea")
+	userB := testUser(t, db, "noteb")
+	if err := db.SaveNote(userA.ID, 2, "follow up on solar battery angle"); err != nil {
+		t.Fatalf("SaveNote: %v", err)
+	}
+
+	article, err := db.GetArticleByID(2, userA.ID)
+	if err != nil {
+		t.Fatalf("GetArticleByID user A: %v", err)
+	}
+	if article.Note != "follow up on solar battery angle" {
+		t.Fatalf("want user A note, got %q", article.Note)
+	}
+	article, err = db.GetArticleByID(2, userB.ID)
+	if err != nil {
+		t.Fatalf("GetArticleByID user B: %v", err)
+	}
+	if article.Note != "" {
+		t.Fatalf("user B should not see user A note, got %q", article.Note)
+	}
+
+	arts, err := db.QueryArticles(QueryParams{UserID: userA.ID, Q: "solar battery", Fields: []string{"notes"}, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles notes search: %v", err)
+	}
+	if len(arts) != 1 || arts[0].ID != 2 || arts[0].Note == "" {
+		t.Fatalf("want article 2 from notes search, got %#v", arts)
+	}
+
+	arts, err = db.QueryArticles(QueryParams{UserID: userB.ID, Q: "solar battery", Fields: []string{"notes"}, Limit: 20})
+	if err != nil {
+		t.Fatalf("QueryArticles user B notes search: %v", err)
+	}
+	if len(arts) != 0 {
+		t.Fatalf("user B should not match user A note, got %#v", arts)
+	}
+}
+
+func TestSaveNoteEmptyDeletesNote(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+
+	user := testUser(t, db, "noteclear")
+	if err := db.SaveNote(user.ID, 1, "temporary note"); err != nil {
+		t.Fatalf("SaveNote: %v", err)
+	}
+	if err := db.SaveNote(user.ID, 1, "   "); err != nil {
+		t.Fatalf("SaveNote empty: %v", err)
+	}
+	article, err := db.GetArticleByID(1, user.ID)
+	if err != nil {
+		t.Fatalf("GetArticleByID: %v", err)
+	}
+	if article.Note != "" {
+		t.Fatalf("want note deleted, got %q", article.Note)
 	}
 }
