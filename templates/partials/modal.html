@@ -57,6 +57,15 @@
         <p>{{.}}</p>
         {{end}}
     </div>
+    <div id="article-highlights-data" hidden>
+        {{range .Highlights}}
+        <span class="saved-highlight"
+              data-id="{{.ID}}"
+              data-snippet="{{.Snippet}}"
+              data-prefix="{{.Prefix}}"
+              data-suffix="{{.Suffix}}"></span>
+        {{end}}
+    </div>
     {{if .Article.Tags}}
     <div class="modal-tags">
         {{range splitTags .Article.Tags}}

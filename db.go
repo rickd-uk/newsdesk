@@ -28,6 +28,19 @@ type Article struct {
 	Note        string
 }
 
+type ArticleHighlight struct {
+	ID          int
+	UserID      int
+	ArticleID   int
+	Site        string
+	Title       string
+	PublishDate string
+	Snippet     string
+	Prefix      string
+	Suffix      string
+	CreatedAt   string
+}
+
 type QueryParams struct {
 	UserID        int
 	Q             string
@@ -243,6 +256,105 @@ func (db *DB) InitNotesTable() error {
 	}
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_notes_user_updated ON article_notes(user_id, updated_at DESC)`)
 	return err
+}
+
+func (db *DB) InitHighlightsTable() error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_highlights (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		snippet TEXT NOT NULL,
+		prefix TEXT,
+		suffix TEXT,
+		created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_highlights_user_created ON article_highlights(user_id, created_at DESC)`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_highlights_article ON article_highlights(article_id)`)
+	return err
+}
+
+func (db *DB) SaveHighlight(userID, articleID int, snippet, prefix, suffix string) (*ArticleHighlight, error) {
+	snippet = strings.TrimSpace(snippet)
+	if snippet == "" {
+		return nil, fmt.Errorf("empty highlight")
+	}
+	res, err := db.Exec(`INSERT INTO article_highlights(user_id, article_id, snippet, prefix, suffix)
+		VALUES(?, ?, ?, ?, ?)`, userID, articleID, snippet, prefix, suffix)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return db.GetHighlight(userID, int(id))
+}
+
+func (db *DB) DeleteHighlight(userID, id int) error {
+	_, err := db.Exec(`DELETE FROM article_highlights WHERE user_id = ? AND id = ?`, userID, id)
+	return err
+}
+
+func (db *DB) GetHighlight(userID, id int) (*ArticleHighlight, error) {
+	row := db.QueryRow(`SELECT h.id, h.user_id, h.article_id,
+		COALESCE(a.site,''), COALESCE(a.title,''), COALESCE(a.publish_date,''),
+		COALESCE(h.snippet,''), COALESCE(h.prefix,''), COALESCE(h.suffix,''), COALESCE(h.created_at,'')
+		FROM article_highlights h
+		LEFT JOIN articles a ON a.id = h.article_id
+		WHERE h.user_id = ? AND h.id = ?`, userID, id)
+	var h ArticleHighlight
+	if err := row.Scan(&h.ID, &h.UserID, &h.ArticleID, &h.Site, &h.Title, &h.PublishDate, &h.Snippet, &h.Prefix, &h.Suffix, &h.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+func (db *DB) GetHighlightsForArticle(userID, articleID int) ([]ArticleHighlight, error) {
+	rows, err := db.Query(`SELECT h.id, h.user_id, h.article_id,
+		COALESCE(a.site,''), COALESCE(a.title,''), COALESCE(a.publish_date,''),
+		COALESCE(h.snippet,''), COALESCE(h.prefix,''), COALESCE(h.suffix,''), COALESCE(h.created_at,'')
+		FROM article_highlights h
+		LEFT JOIN articles a ON a.id = h.article_id
+		WHERE h.user_id = ? AND h.article_id = ?
+		ORDER BY h.id`, userID, articleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHighlights(rows)
+}
+
+func (db *DB) GetHighlightsForUser(userID int) ([]ArticleHighlight, error) {
+	rows, err := db.Query(`SELECT h.id, h.user_id, h.article_id,
+		COALESCE(a.site,''), COALESCE(a.title,''), COALESCE(a.publish_date,''),
+		COALESCE(h.snippet,''), COALESCE(h.prefix,''), COALESCE(h.suffix,''), COALESCE(h.created_at,'')
+		FROM article_highlights h
+		LEFT JOIN articles a ON a.id = h.article_id
+		WHERE h.user_id = ?
+		ORDER BY h.created_at DESC, h.id DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHighlights(rows)
+}
+
+func scanHighlights(rows *sql.Rows) ([]ArticleHighlight, error) {
+	var out []ArticleHighlight
+	for rows.Next() {
+		var h ArticleHighlight
+		if err := rows.Scan(&h.ID, &h.UserID, &h.ArticleID, &h.Site, &h.Title, &h.PublishDate, &h.Snippet, &h.Prefix, &h.Suffix, &h.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 func (db *DB) SaveNote(userID, id int, note string) error {

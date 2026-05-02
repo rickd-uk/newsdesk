@@ -160,6 +160,7 @@
                     <label class="check-label">
                         <input type="checkbox" name="hide_notes" value="1" onchange="fireFeedRefresh()"{{if .HideNotes}} checked{{end}}{{if not .CurrentUser}} disabled{{end}}> Hide notes
                     </label>
+                    <button type="button" class="filter-action-btn" onclick="openHighlightsPanel()">Highlights</button>
                 </div>
             </div>
             <div class="filter-inline-group">
@@ -220,6 +221,16 @@
 
     <div id="modal-overlay">
         <div id="modal-container"></div>
+    </div>
+
+    <div id="highlights-overlay" onclick="handleHighlightsOverlayClick(event)">
+        <div id="highlights-panel" role="dialog" aria-modal="true" aria-labelledby="highlights-title">
+            <div class="highlights-panel-head">
+                <h2 id="highlights-title">Highlights</h2>
+                <button class="auth-close-btn" type="button" onclick="closeHighlightsPanel()" title="Close">&#x2715;</button>
+            </div>
+            <div id="highlights-list" class="highlights-list"></div>
+        </div>
     </div>
 
     <div id="auth-overlay" class="{{if or (not .CurrentUser) .AuthError .AuthMode}}preopen{{end}}" onclick="handleAuthOverlayClick(event)">

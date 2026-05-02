@@ -13,7 +13,8 @@ function filterDrawerLocksPage() {
 function updateBodyScrollLock() {
     const modalOpen = document.getElementById('modal-overlay')?.classList.contains('open');
     const authOpen = document.getElementById('auth-overlay')?.classList.contains('open');
-    document.body.style.overflow = (modalOpen || authOpen || filterDrawerLocksPage()) ? 'hidden' : '';
+    const highlightsOpen = document.getElementById('highlights-overlay')?.classList.contains('open');
+    document.body.style.overflow = (modalOpen || authOpen || highlightsOpen || filterDrawerLocksPage()) ? 'hidden' : '';
 }
 
 // ── Font & size preference ──
@@ -90,6 +91,7 @@ function removeCardIfExcludedByStateFilters(card) {
 function dismissModal() {
     const overlay = document.getElementById('modal-overlay');
     if (!overlay) return;
+    clearArticleSelection();
     overlay.classList.remove('open');
     const container = document.getElementById('modal-container');
     if (container) container.innerHTML = '';
@@ -139,6 +141,8 @@ document.addEventListener('keydown', function(e) {
             dismissModal();
         } else if (document.getElementById('auth-overlay')?.classList.contains('open')) {
             closeAuthModal();
+        } else if (document.getElementById('highlights-overlay')?.classList.contains('open')) {
+            closeHighlightsPanel();
         } else if (document.getElementById('filter-panel')?.classList.contains('open')) {
             toggleFilters();
         }
@@ -154,6 +158,8 @@ document.body.addEventListener('htmx:afterSwap', function(e) {
         var modalEl = document.querySelector('#modal-container .modal');
         var id = modalEl && modalEl.dataset.articleId;
         if (id) setupReadSentinel(id);
+        setupHighlightSelection();
+        applySavedHighlights();
     }
 });
 
@@ -383,6 +389,320 @@ function clearArticleNote() {
     if (!input) return;
     input.value = '';
     saveArticleNote();
+}
+
+// ── Highlights ──
+
+function setupHighlightSelection() {
+    const content = document.getElementById('article-content');
+    const modal = document.querySelector('.modal');
+    if (!content || !modal || modal.dataset.authenticated !== '1') return;
+
+    document.removeEventListener('selectionchange', handleArticleSelectionChange);
+    document.addEventListener('selectionchange', handleArticleSelectionChange);
+}
+
+function handleArticleSelectionChange() {
+    const content = document.getElementById('article-content');
+    if (!content) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.toString().trim()) {
+        hideHighlightAction();
+        return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!content.contains(range.commonAncestorContainer)) {
+        hideHighlightAction();
+        return;
+    }
+    showHighlightAction(range);
+}
+
+function showHighlightAction(range) {
+    let btn = document.getElementById('highlight-action');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'highlight-action';
+        btn.type = 'button';
+        btn.className = 'highlight-action';
+        btn.textContent = 'Highlight';
+        btn.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            saveSelectedHighlight();
+        });
+        document.body.appendChild(btn);
+    }
+    const rect = range.getBoundingClientRect();
+    btn.style.left = Math.max(8, rect.left + rect.width / 2 - 42) + 'px';
+    btn.style.top = Math.max(8, rect.top - 42) + 'px';
+    btn.hidden = false;
+}
+
+function hideHighlightAction() {
+    const btn = document.getElementById('highlight-action');
+    if (btn) btn.hidden = true;
+}
+
+function clearArticleSelection() {
+    hideHighlightAction();
+    window.getSelection()?.removeAllRanges();
+    document.removeEventListener('selectionchange', handleArticleSelectionChange);
+}
+
+function saveSelectedHighlight() {
+    const modal = document.querySelector('.modal');
+    const content = document.getElementById('article-content');
+    const selection = window.getSelection();
+    if (!modal || !content || !selection || selection.rangeCount === 0) return;
+    const snippet = normalizeHighlightText(selection.toString());
+    if (!snippet) return;
+
+    const allText = normalizeHighlightText(content.innerText);
+    const idx = allText.indexOf(snippet);
+    const body = new URLSearchParams();
+    body.set('snippet', snippet);
+    if (idx >= 0) {
+        body.set('prefix', allText.slice(Math.max(0, idx - 80), idx));
+        body.set('suffix', allText.slice(idx + snippet.length, idx + snippet.length + 80));
+    }
+
+    fetch('/article/' + modal.dataset.articleId + '/highlight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+    }).then(function(resp) {
+        if (!resp.ok) throw new Error('save highlight failed');
+        return resp.json();
+    }).then(function(highlight) {
+        appendSavedHighlightData(highlight);
+        window.getSelection()?.removeAllRanges();
+        hideHighlightAction();
+        applySavedHighlights();
+    });
+}
+
+function appendSavedHighlightData(highlight) {
+    const holder = document.getElementById('article-highlights-data');
+    if (!holder) return;
+    const el = document.createElement('span');
+    el.className = 'saved-highlight';
+    el.dataset.id = highlight.ID;
+    el.dataset.snippet = highlight.Snippet;
+    el.dataset.prefix = highlight.Prefix || '';
+    el.dataset.suffix = highlight.Suffix || '';
+    holder.appendChild(el);
+}
+
+function applySavedHighlights() {
+    const content = document.getElementById('article-content');
+    if (!content) return;
+    unwrapArticleHighlights(content);
+    document.querySelectorAll('#article-highlights-data .saved-highlight').forEach(function(el) {
+        applyHighlightText(content, el.dataset.snippet || '', el.dataset.id || '', el.dataset.prefix || '', el.dataset.suffix || '');
+    });
+}
+
+function unwrapArticleHighlights(root) {
+    root.querySelectorAll('mark.article-highlight').forEach(function(mark) {
+        mark.replaceWith(document.createTextNode(mark.textContent));
+    });
+    root.normalize();
+}
+
+function normalizeHighlightText(text) {
+    return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function buildHighlightTextMap(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(node) {
+            if (node.parentElement?.closest('mark.article-highlight')) return NodeFilter.FILTER_REJECT;
+            return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+    });
+    const segments = [];
+    let fullText = '';
+    let node;
+    while ((node = walker.nextNode())) {
+        if (fullText) {
+            fullText += ' ';
+            segments.push({ spacer: true, start: fullText.length - 1, end: fullText.length });
+        }
+        const raw = node.nodeValue;
+        const leading = raw.match(/^\s*/)[0].length;
+        const trailing = raw.match(/\s*$/)[0].length;
+        const trimmed = raw.slice(leading, raw.length - trailing);
+        if (!trimmed) continue;
+        const start = fullText.length;
+        fullText += trimmed.replace(/\s+/g, ' ');
+        segments.push({
+            node: node,
+            raw: raw,
+            start: start,
+            end: fullText.length,
+            leading: leading,
+            trimmed: trimmed,
+        });
+    }
+    return { fullText: fullText, segments: segments };
+}
+
+function textMapPositionToDom(segments, pos, preferEnd) {
+    for (const seg of segments) {
+        if (seg.spacer) continue;
+        if (pos < seg.start || pos > seg.end || (pos === seg.end && !preferEnd)) continue;
+        const within = Math.min(Math.max(pos - seg.start, 0), seg.end - seg.start);
+        return { node: seg.node, offset: mappedOffsetForSegment(seg, within) };
+    }
+    const textSegments = segments.filter(function(seg) { return !seg.spacer; });
+    const fallback = preferEnd ? textSegments[textSegments.length - 1] : textSegments[0];
+    if (!fallback) return null;
+    return { node: fallback.node, offset: preferEnd ? fallback.node.nodeValue.length : 0 };
+}
+
+function mappedOffsetForSegment(seg, normalizedOffset) {
+    let seen = 0;
+    let inSpace = false;
+    for (let i = 0; i < seg.trimmed.length; i++) {
+        const ch = seg.trimmed[i];
+        const isSpace = /\s/.test(ch);
+        if (isSpace) {
+            if (inSpace) continue;
+            inSpace = true;
+        } else {
+            inSpace = false;
+        }
+        if (seen === normalizedOffset) return seg.leading + i;
+        seen++;
+    }
+    return seg.leading + seg.trimmed.length;
+}
+
+function findHighlightIndex(fullText, snippet, prefix, suffix) {
+    const normalizedSnippet = normalizeHighlightText(snippet);
+    const normalizedPrefix = normalizeHighlightText(prefix);
+    const normalizedSuffix = normalizeHighlightText(suffix);
+    if (!normalizedSnippet) return -1;
+
+    let bestIdx = -1;
+    let bestScore = -1;
+    let from = 0;
+    while (true) {
+        const idx = fullText.indexOf(normalizedSnippet, from);
+        if (idx < 0) break;
+        let score = 0;
+        if (normalizedPrefix && fullText.slice(Math.max(0, idx - normalizedPrefix.length), idx) === normalizedPrefix) score += 2;
+        if (normalizedSuffix && fullText.slice(idx + normalizedSnippet.length, idx + normalizedSnippet.length + normalizedSuffix.length) === normalizedSuffix) score += 2;
+        if (score > bestScore) {
+            bestScore = score;
+            bestIdx = idx;
+        }
+        from = idx + Math.max(1, normalizedSnippet.length);
+    }
+    return bestIdx;
+}
+
+function applyHighlightText(root, snippet, id, prefix, suffix) {
+    snippet = normalizeHighlightText(snippet);
+    if (!snippet) return false;
+    const textMap = buildHighlightTextMap(root);
+    const idx = findHighlightIndex(textMap.fullText, snippet, prefix, suffix);
+    if (idx < 0) return false;
+    const start = textMapPositionToDom(textMap.segments, idx, false);
+    const end = textMapPositionToDom(textMap.segments, idx + snippet.length, true);
+    if (!start || !end) return false;
+
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    const mark = document.createElement('mark');
+    mark.className = 'article-highlight';
+    mark.dataset.highlightId = id;
+    try {
+        range.surroundContents(mark);
+    } catch (e) {
+        mark.appendChild(range.extractContents());
+        range.insertNode(mark);
+    }
+    return true;
+}
+
+function openHighlightsPanel() {
+    const overlay = document.getElementById('highlights-overlay');
+    const list = document.getElementById('highlights-list');
+    if (!overlay || !list) return;
+    overlay.classList.add('open');
+    list.textContent = 'Loading...';
+    updateBodyScrollLock();
+    fetch('/highlights').then(function(resp) {
+        if (!resp.ok) throw new Error('load highlights failed');
+        return resp.json();
+    }).then(renderHighlightsList).catch(function() {
+        list.textContent = 'Could not load highlights.';
+    });
+}
+
+function closeHighlightsPanel() {
+    document.getElementById('highlights-overlay')?.classList.remove('open');
+    updateBodyScrollLock();
+}
+
+function handleHighlightsOverlayClick(e) {
+    if (e.target.id === 'highlights-overlay') closeHighlightsPanel();
+}
+
+function renderHighlightsList(items) {
+    const list = document.getElementById('highlights-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!items || !items.length) {
+        list.textContent = 'No highlights yet.';
+        return;
+    }
+    items.forEach(function(item) {
+        const row = document.createElement('div');
+        row.className = 'highlight-row';
+
+        const openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.className = 'highlight-open';
+        openBtn.addEventListener('click', function() {
+            closeHighlightsPanel();
+            htmx.ajax('GET', '/article/' + item.ArticleID, { target: '#modal-container', swap: 'innerHTML' });
+        });
+
+        const title = document.createElement('div');
+        title.className = 'highlight-title';
+        title.textContent = item.Title || 'Untitled article';
+        const meta = document.createElement('div');
+        meta.className = 'highlight-meta';
+        meta.textContent = [item.Site, item.PublishDate].filter(Boolean).join(' · ');
+        const snippet = document.createElement('div');
+        snippet.className = 'highlight-snippet';
+        snippet.textContent = item.Snippet;
+        openBtn.append(title, meta, snippet);
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'highlight-delete';
+        del.title = 'Delete highlight';
+        del.textContent = '×';
+        del.addEventListener('click', function() { deleteHighlight(item.ID, row); });
+
+        row.append(openBtn, del);
+        list.appendChild(row);
+    });
+}
+
+function deleteHighlight(id, row) {
+    fetch('/highlight/' + id, { method: 'DELETE' }).then(function(resp) {
+        if (!resp.ok) throw new Error('delete failed');
+        if (row) row.remove();
+        document.querySelectorAll('#article-highlights-data .saved-highlight').forEach(function(el) {
+            if (el.dataset.id === String(id)) el.remove();
+        });
+        applySavedHighlights();
+    });
 }
 
 // ── Copy article content ──

@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log"
@@ -67,6 +68,7 @@ type CardsData struct {
 type ModalData struct {
 	Article     *Article
 	CurrentUser *User
+	Highlights  []ArticleHighlight
 }
 
 func parseFields(r *http.Request) []string {
@@ -432,6 +434,8 @@ func (s *Server) handleArticleDispatch(w http.ResponseWriter, r *http.Request) {
 		s.handleUnmarkArchived(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/note"):
 		s.handleSaveNote(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/highlight"):
+		s.handleSaveHighlight(w, r)
 	default:
 		s.handleArticle(w, r)
 	}
@@ -457,7 +461,12 @@ func (s *Server) handleArticle(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.tmpl.ExecuteTemplate(w, "modal", ModalData{Article: article, CurrentUser: user}); err != nil {
+	highlights, err := s.db.GetHighlightsForArticle(userID, id)
+	if err != nil {
+		http.Error(w, "load highlights failed", http.StatusInternalServerError)
+		return
+	}
+	if err := s.tmpl.ExecuteTemplate(w, "modal", ModalData{Article: article, CurrentUser: user, Highlights: highlights}); err != nil {
 		log.Printf("execute modal: %v", err)
 	}
 }
@@ -572,6 +581,75 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSaveHighlight(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/highlight")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	h, err := s.db.SaveHighlight(user.ID, id, r.FormValue("snippet"), r.FormValue("prefix"), r.FormValue("suffix"))
+	if err != nil {
+		http.Error(w, "save highlight failed", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, h)
+}
+
+func (s *Server) handleHighlightDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/highlight/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.DeleteHighlight(user.ID, id); err != nil {
+		http.Error(w, "delete highlight failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleHighlights(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	highlights, err := s.db.GetHighlightsForUser(user.ID)
+	if err != nil {
+		http.Error(w, "load highlights failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, highlights)
+}
+
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("write json: %v", err)
+	}
 }
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {

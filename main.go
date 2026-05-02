@@ -47,6 +47,9 @@ func main() {
 	if err := db.InitNotesTable(); err != nil {
 		log.Fatalf("init notes table: %v", err)
 	}
+	if err := db.InitHighlightsTable(); err != nil {
+		log.Fatalf("init highlights table: %v", err)
+	}
 
 	tmpl, err := mustParseTemplatesFS(embeddedFiles)
 	if err != nil {
@@ -59,6 +62,8 @@ func main() {
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	http.HandleFunc("/articles", srv.handleArticles)
 	http.HandleFunc("/article/", srv.handleArticleDispatch)
+	http.HandleFunc("/highlight/", srv.handleHighlightDispatch)
+	http.HandleFunc("/highlights", srv.handleHighlights)
 	http.HandleFunc("/signup", srv.handleSignup)
 	http.HandleFunc("/login", srv.handleLogin)
 	http.HandleFunc("/logout", srv.handleLogout)
