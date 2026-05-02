@@ -26,6 +26,7 @@ type Article struct {
 	Favorited   bool
 	Archived    bool
 	Note        string
+	UserTags    string
 }
 
 type ArticleHighlight struct {
@@ -55,8 +56,18 @@ type QueryParams struct {
 	FavoritesOnly bool
 	ArchivedOnly  bool
 	HideNotes     bool
+	UserTag       string
 	Offset        int
 	Limit         int
+}
+
+type HighlightQueryParams struct {
+	UserID   int
+	Q        string
+	Site     string
+	Category string
+	DateFrom string
+	DateTo   string
 }
 
 func buildFTSPrefix(fields []string) string {
@@ -279,6 +290,79 @@ func (db *DB) InitHighlightsTable() error {
 	return err
 }
 
+func (db *DB) InitUserTagsTable() error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS article_user_tags (
+		user_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		tag TEXT NOT NULL,
+		created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(user_id, article_id, tag),
+		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_user_tags_user_tag ON article_user_tags(user_id, tag)`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_article_user_tags_article ON article_user_tags(article_id)`)
+	return err
+}
+
+func normalizeUserTags(raw string) []string {
+	seen := map[string]bool{}
+	var tags []string
+	for _, part := range strings.Split(raw, ",") {
+		tag := strings.ToLower(strings.TrimSpace(part))
+		tag = strings.Join(strings.Fields(tag), " ")
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
+func (db *DB) SaveUserTags(userID, articleID int, raw string) (string, error) {
+	tags := normalizeUserTags(raw)
+	tx, err := db.Begin()
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(`DELETE FROM article_user_tags WHERE user_id = ? AND article_id = ?`, userID, articleID); err != nil {
+		tx.Rollback()
+		return "", err
+	}
+	for _, tag := range tags {
+		if _, err := tx.Exec(`INSERT INTO article_user_tags(user_id, article_id, tag) VALUES(?, ?, ?)`, userID, articleID, tag); err != nil {
+			tx.Rollback()
+			return "", err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return strings.Join(tags, ","), nil
+}
+
+func (db *DB) GetUserTags(userID int) ([]string, error) {
+	rows, err := db.Query(`SELECT DISTINCT tag FROM article_user_tags WHERE user_id = ? ORDER BY tag`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tags []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
+	}
+	return tags, rows.Err()
+}
+
 func (db *DB) SaveHighlight(userID, articleID int, snippet, prefix, suffix string) (*ArticleHighlight, error) {
 	snippet = strings.TrimSpace(snippet)
 	if snippet == "" {
@@ -330,14 +414,37 @@ func (db *DB) GetHighlightsForArticle(userID, articleID int) ([]ArticleHighlight
 	return scanHighlights(rows)
 }
 
-func (db *DB) GetHighlightsForUser(userID int) ([]ArticleHighlight, error) {
-	rows, err := db.Query(`SELECT h.id, h.user_id, h.article_id,
+func (db *DB) GetHighlightsForUser(p HighlightQueryParams) ([]ArticleHighlight, error) {
+	q := `SELECT h.id, h.user_id, h.article_id,
 		COALESCE(a.site,''), COALESCE(a.title,''), COALESCE(a.publish_date,''),
 		COALESCE(h.snippet,''), COALESCE(h.prefix,''), COALESCE(h.suffix,''), COALESCE(h.created_at,'')
 		FROM article_highlights h
 		LEFT JOIN articles a ON a.id = h.article_id
-		WHERE h.user_id = ?
-		ORDER BY h.created_at DESC, h.id DESC`, userID)
+		WHERE h.user_id = ?`
+	args := []interface{}{p.UserID}
+	if p.Q != "" {
+		q += " AND (h.snippet LIKE ? OR a.title LIKE ?)"
+		like := "%" + p.Q + "%"
+		args = append(args, like, like)
+	}
+	if p.Site != "" {
+		q += " AND a.site = ?"
+		args = append(args, p.Site)
+	}
+	if p.Category != "" {
+		q += " AND a.category = ?"
+		args = append(args, p.Category)
+	}
+	if p.DateFrom != "" {
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) >= ?)"
+		args = append(args, p.DateFrom)
+	}
+	if p.DateTo != "" {
+		q += " AND (date(a.publish_date) IS NULL OR date(a.publish_date) <= ?)"
+		args = append(args, p.DateTo)
+	}
+	q += " ORDER BY h.created_at DESC, h.id DESC"
+	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -524,8 +631,9 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 	      LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 	      LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
 	      LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
+	      LEFT JOIN article_user_tags ut_filter ON a.id = ut_filter.article_id AND ut_filter.user_id = ?
 	      WHERE 1=1`
-	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID}
+	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID, p.UserID}
 	var ok bool
 	q, args, ok = appendSearchCondition(q, args, p)
 	if !ok {
@@ -564,6 +672,10 @@ func (db *DB) CountArticles(p QueryParams) (int, error) {
 		q += " AND ar.article_id IS NOT NULL"
 	} else if p.UserID != 0 {
 		q += " AND ar.article_id IS NULL"
+	}
+	if p.UserTag != "" {
+		q += " AND ut_filter.tag = ?"
+		args = append(args, p.UserTag)
 	}
 	return count, db.QueryRow(q, args...).Scan(&count)
 }
@@ -662,14 +774,17 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 			COALESCE(r.read_at,''),
 			CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END,
 			CASE WHEN ar.article_id IS NOT NULL THEN 1 ELSE 0 END,
-			COALESCE(n.note, '')
+			COALESCE(n.note, ''),
+			COALESCE(GROUP_CONCAT(DISTINCT ut.tag), '')
 			FROM articles a
 			LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
 			LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 			LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
 			LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
+			LEFT JOIN article_user_tags ut ON a.id = ut.article_id AND ut.user_id = ?
+			LEFT JOIN article_user_tags ut_filter ON a.id = ut_filter.article_id AND ut_filter.user_id = ?
 			WHERE 1=1`
-	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID}
+	args := []interface{}{p.UserID, p.UserID, p.UserID, p.UserID, p.UserID, p.UserID}
 	var ok bool
 	q, args, ok = appendSearchCondition(q, args, p)
 	if !ok {
@@ -709,6 +824,11 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 	} else if p.UserID != 0 {
 		q += " AND ar.article_id IS NULL"
 	}
+	if p.UserTag != "" {
+		q += " AND ut_filter.tag = ?"
+		args = append(args, p.UserTag)
+	}
+	q += " GROUP BY a.id"
 	if p.ReadsOnly {
 		q += " ORDER BY r.read_at DESC, a.publish_date DESC, a.scraped_at DESC LIMIT ? OFFSET ?"
 	} else {
@@ -726,7 +846,7 @@ func (db *DB) QueryArticles(p QueryParams) ([]Article, error) {
 		var a Article
 		if err := rows.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
 			&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
-			&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note); err != nil {
+			&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note, &a.UserTags); err != nil {
 			return nil, err
 		}
 		articles = append(articles, a)
@@ -743,17 +863,18 @@ func (db *DB) GetArticleByID(id, userID int) (*Article, error) {
 		COALESCE(r.read_at,''),
 		CASE WHEN fav.article_id IS NOT NULL THEN 1 ELSE 0 END,
 		CASE WHEN ar.article_id IS NOT NULL THEN 1 ELSE 0 END,
-		COALESCE(n.note, '')
+		COALESCE(n.note, ''),
+		COALESCE((SELECT GROUP_CONCAT(tag) FROM article_user_tags ut WHERE ut.user_id = ? AND ut.article_id = a.id ORDER BY tag), '')
 		FROM articles a
 		LEFT JOIN article_reads r ON a.id = r.article_id AND r.user_id = ?
 		LEFT JOIN article_favorites fav ON a.id = fav.article_id AND fav.user_id = ?
 		LEFT JOIN article_archives ar ON a.id = ar.article_id AND ar.user_id = ?
 		LEFT JOIN article_notes n ON a.id = n.article_id AND n.user_id = ?
-		WHERE a.id = ?`, userID, userID, userID, userID, id)
+		WHERE a.id = ?`, userID, userID, userID, userID, userID, id)
 	var a Article
 	if err := row.Scan(&a.ID, &a.Site, &a.URL, &a.Category, &a.Title,
 		&a.Author, &a.PublishDate, &a.Tags, &a.Content, &a.ScrapedAt,
-		&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note); err != nil {
+		&a.Read, &a.ReadAt, &a.Favorited, &a.Archived, &a.Note, &a.UserTags); err != nil {
 		return nil, err
 	}
 	return &a, nil

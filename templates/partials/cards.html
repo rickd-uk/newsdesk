@@ -6,6 +6,7 @@
 <div class="card{{if .Read}} read{{end}}{{if .Favorited}} favorited{{end}}{{if .Archived}} archived{{end}}"
      id="card-{{.ID}}"
      data-id="{{.ID}}"
+     data-user-tags="{{.UserTags}}"
      hx-get="/article/{{.ID}}"
      hx-target="#modal-container"
      hx-swap="innerHTML">
@@ -20,6 +21,11 @@
     <h3 class="card-title">{{.Title}}</h3>
     {{if .Author}}<div class="card-author">{{.Author}}</div>{{end}}
     <p class="card-excerpt">{{excerpt .Content}}</p>
+    {{if .UserTags}}
+    <div class="card-user-tags">
+        {{range splitTags .UserTags}}<span class="user-tag">{{.}}</span>{{end}}
+    </div>
+    {{end}}
     {{if and .Note (not $.HideNotes)}}<div class="card-note">Note: {{excerpt .Note}}</div>{{end}}
 </div>
 {{end}}

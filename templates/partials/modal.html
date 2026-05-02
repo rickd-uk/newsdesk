@@ -34,6 +34,7 @@
             <button class="fav-btn{{if .Article.Favorited}} active{{end}}" id="fav-btn" onclick="toggleFavorite()" title="{{if .Article.Favorited}}Unsave{{else}}Save{{end}}"{{if not .CurrentUser}} disabled{{end}}>{{if .Article.Favorited}}★{{else}}☆{{end}}</button>
             <button class="archive-btn{{if .Article.Archived}} active{{end}}" id="archive-btn" onclick="toggleArchive()" title="{{if .Article.Archived}}Unarchive{{else}}Archive{{end}}"{{if not .CurrentUser}} disabled{{end}}>▣</button>
             <button class="note-toggle-btn{{if .Article.Note}} active{{end}}" id="note-toggle-btn" onclick="toggleArticleNote()" title="{{if .Article.Note}}Hide note{{else}}Add note{{end}}"{{if not .CurrentUser}} disabled{{end}}>✎</button>
+            <button class="tag-toggle-btn{{if .Article.UserTags}} active{{end}}" id="tag-toggle-btn" onclick="toggleArticleTags()" title="{{if .Article.UserTags}}Edit tags{{else}}Add tags{{end}}"{{if not .CurrentUser}} disabled{{end}}>⌗</button>
             {{if .Article.URL}}<a class="original-link" href="{{.Article.URL}}" target="_blank" rel="noopener noreferrer" title="Open original article">&#x2197;</a>{{end}}
         </div>
     </div>
@@ -49,6 +50,18 @@
         <div class="note-actions">
             <button class="note-save-btn" type="button" onclick="saveArticleNote()">Save note</button>
             <button class="note-clear-btn" type="button" onclick="clearArticleNote()"{{if not .Article.Note}} disabled{{end}}>Clear</button>
+        </div>
+    </div>
+    <div class="tag-panel{{if not .Article.UserTags}} hidden{{end}}" id="tag-panel">
+        <div class="note-panel-head">
+            <span class="label">Tags</span>
+            <span class="note-save-status" id="tag-save-status"></span>
+        </div>
+        <input type="text" id="article-tags-input" class="filter-text-input tag-input"
+               value="{{.Article.UserTags}}" placeholder="ai, japan, follow-up">
+        <div class="tag-actions">
+            <button class="note-save-btn" type="button" onclick="saveArticleTags()">Save tags</button>
+            <button class="note-clear-btn" type="button" onclick="clearArticleTags()"{{if not .Article.UserTags}} disabled{{end}}>Clear</button>
         </div>
     </div>
     {{end}}

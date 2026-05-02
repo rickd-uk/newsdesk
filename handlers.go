@@ -21,29 +21,31 @@ type Server struct {
 }
 
 type PageData struct {
-	Sites          []string
-	CategoryGroups []CategoryGroup
-	CurrentUser    *User
-	AuthError      string
-	AuthMode       string
-	SignupEnabled  bool
-	CurrentPath    string
-	Q              string
-	Author         string
-	DateFrom       string
-	DateTo         string
-	SearchTitle    bool
-	SearchBody     bool
-	SearchTags     bool
-	SearchNotes    bool
-	SelectedSite   string
-	SelectedCat    string
-	HideRead       bool
-	ReadsOnly      bool
-	FavoritesOnly  bool
-	ArchivedOnly   bool
-	HideNotes      bool
-	Cards          CardsData
+	Sites           []string
+	CategoryGroups  []CategoryGroup
+	CurrentUser     *User
+	AuthError       string
+	AuthMode        string
+	SignupEnabled   bool
+	CurrentPath     string
+	Q               string
+	Author          string
+	DateFrom        string
+	DateTo          string
+	SearchTitle     bool
+	SearchBody      bool
+	SearchTags      bool
+	SearchNotes     bool
+	SelectedSite    string
+	SelectedCat     string
+	HideRead        bool
+	ReadsOnly       bool
+	FavoritesOnly   bool
+	ArchivedOnly    bool
+	HideNotes       bool
+	UserTags        []string
+	SelectedUserTag string
+	Cards           CardsData
 }
 
 type CardsData struct {
@@ -61,6 +63,7 @@ type CardsData struct {
 	FavoritesOnly bool
 	ArchivedOnly  bool
 	HideNotes     bool
+	UserTag       string
 	NextOffset    int
 	HasMore       bool
 }
@@ -89,6 +92,10 @@ func hasField(fields []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeUserTagParam(tag string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(tag))), " ")
 }
 
 func buildFuncMap() template.FuncMap {
@@ -173,6 +180,9 @@ func buildFuncMap() template.FuncMap {
 			if d.HideNotes {
 				params.Set("hide_notes", "1")
 			}
+			if d.UserTag != "" {
+				params.Set("user_tag", d.UserTag)
+			}
 			params.Set("offset", strconv.Itoa(d.NextOffset))
 			return template.URL("/articles?" + params.Encode())
 		},
@@ -232,6 +242,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	author := r.URL.Query().Get("author")
 	dateFrom := r.URL.Query().Get("date_from")
 	dateTo := r.URL.Query().Get("date_to")
+	userTag := normalizeUserTagParam(r.URL.Query().Get("user_tag"))
 	fields := parseFields(r)
 	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
 	readsOnly := user != nil && r.URL.Query().Get("reads_only") == "1"
@@ -252,41 +263,44 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Q:      q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
 		Fields: fields, HideRead: hideRead, ReadsOnly: readsOnly,
-		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes,
+		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes, UserTag: userTag,
 	}
 	sites, _ := s.db.GetSites()
 	catInfos, _ := s.db.GetCategoryInfos()
+	userTags, _ := s.db.GetUserTags(userID)
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: 0,
 		UserID: qp.UserID,
 		Q:      qp.Q, Site: qp.Site, Category: qp.Category,
 		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
 		Fields: qp.Fields, HideRead: qp.HideRead, ReadsOnly: qp.ReadsOnly,
-		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes})
+		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes, UserTag: qp.UserTag})
 	total, _ := s.db.CountArticles(qp)
 
 	data := PageData{
-		Sites:          sites,
-		CategoryGroups: BuildCategoryTree(catInfos),
-		CurrentUser:    user,
-		AuthError:      r.URL.Query().Get("auth_error"),
-		AuthMode:       r.URL.Query().Get("auth_mode"),
-		SignupEnabled:  s.signupEnabled,
-		CurrentPath:    currentPath(r),
-		Q:              q,
-		Author:         author,
-		DateFrom:       dateFrom,
-		DateTo:         dateTo,
-		SearchTitle:    hasField(fields, "title"),
-		SearchBody:     hasField(fields, "body"),
-		SearchTags:     hasField(fields, "tags"),
-		SearchNotes:    hasField(fields, "notes"),
-		SelectedSite:   site,
-		SelectedCat:    cat,
-		HideRead:       hideRead,
-		ReadsOnly:      readsOnly,
-		FavoritesOnly:  favoritesOnly,
-		ArchivedOnly:   archivedOnly,
-		HideNotes:      hideNotes,
+		Sites:           sites,
+		CategoryGroups:  BuildCategoryTree(catInfos),
+		CurrentUser:     user,
+		AuthError:       r.URL.Query().Get("auth_error"),
+		AuthMode:        r.URL.Query().Get("auth_mode"),
+		SignupEnabled:   s.signupEnabled,
+		CurrentPath:     currentPath(r),
+		Q:               q,
+		Author:          author,
+		DateFrom:        dateFrom,
+		DateTo:          dateTo,
+		SearchTitle:     hasField(fields, "title"),
+		SearchBody:      hasField(fields, "body"),
+		SearchTags:      hasField(fields, "tags"),
+		SearchNotes:     hasField(fields, "notes"),
+		SelectedSite:    site,
+		SelectedCat:     cat,
+		HideRead:        hideRead,
+		ReadsOnly:       readsOnly,
+		FavoritesOnly:   favoritesOnly,
+		ArchivedOnly:    archivedOnly,
+		HideNotes:       hideNotes,
+		UserTags:        userTags,
+		SelectedUserTag: userTag,
 		Cards: CardsData{
 			Articles:      articles,
 			TotalCount:    total,
@@ -302,6 +316,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			FavoritesOnly: favoritesOnly,
 			ArchivedOnly:  archivedOnly,
 			HideNotes:     hideNotes,
+			UserTag:       userTag,
 			NextOffset:    pageSize,
 			HasMore:       len(articles) == pageSize,
 		},
@@ -322,6 +337,7 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	author := r.URL.Query().Get("author")
 	dateFrom := r.URL.Query().Get("date_from")
 	dateTo := r.URL.Query().Get("date_to")
+	userTag := normalizeUserTagParam(r.URL.Query().Get("user_tag"))
 	fields := parseFields(r)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	hideRead := user != nil && r.URL.Query().Get("hide_read") == "1"
@@ -340,13 +356,13 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 	qp := QueryParams{UserID: userID, Q: q, Site: site, Category: cat,
 		Author: author, DateFrom: dateFrom, DateTo: dateTo,
 		Fields: fields, HideRead: hideRead, ReadsOnly: readsOnly,
-		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes}
+		FavoritesOnly: favoritesOnly, ArchivedOnly: archivedOnly, HideNotes: hideNotes, UserTag: userTag}
 	articles, _ := s.db.QueryArticles(QueryParams{Limit: pageSize, Offset: offset,
 		UserID: qp.UserID,
 		Q:      qp.Q, Site: qp.Site, Category: qp.Category,
 		Author: qp.Author, DateFrom: qp.DateFrom, DateTo: qp.DateTo,
 		Fields: qp.Fields, HideRead: qp.HideRead, ReadsOnly: qp.ReadsOnly,
-		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes})
+		FavoritesOnly: qp.FavoritesOnly, ArchivedOnly: qp.ArchivedOnly, HideNotes: qp.HideNotes, UserTag: qp.UserTag})
 	total, _ := s.db.CountArticles(qp)
 
 	if offset == 0 {
@@ -387,6 +403,9 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		if hideNotes {
 			params.Set("hide_notes", "1")
 		}
+		if userTag != "" {
+			params.Set("user_tag", userTag)
+		}
 		pushURL := "/"
 		if len(params) > 0 {
 			pushURL += "?" + params.Encode()
@@ -409,6 +428,7 @@ func (s *Server) handleArticles(w http.ResponseWriter, r *http.Request) {
 		FavoritesOnly: favoritesOnly,
 		ArchivedOnly:  archivedOnly,
 		HideNotes:     hideNotes,
+		UserTag:       userTag,
 		NextOffset:    offset + pageSize,
 		HasMore:       len(articles) == pageSize,
 	}
@@ -436,6 +456,8 @@ func (s *Server) handleArticleDispatch(w http.ResponseWriter, r *http.Request) {
 		s.handleSaveNote(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/highlight"):
 		s.handleSaveHighlight(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/tags"):
+		s.handleSaveUserTags(w, r)
 	default:
 		s.handleArticle(w, r)
 	}
@@ -583,6 +605,29 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleSaveUserTags(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/article/"), "/tags")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	tags, err := s.db.SaveUserTags(user.ID, id, r.FormValue("tags"))
+	if err != nil {
+		http.Error(w, "save tags failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"tags": tags})
+}
+
 func (s *Server) handleSaveHighlight(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireUser(w, r)
 	if !ok {
@@ -637,7 +682,14 @@ func (s *Server) handleHighlights(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	highlights, err := s.db.GetHighlightsForUser(user.ID)
+	highlights, err := s.db.GetHighlightsForUser(HighlightQueryParams{
+		UserID:   user.ID,
+		Q:        strings.TrimSpace(r.URL.Query().Get("q")),
+		Site:     r.URL.Query().Get("site"),
+		Category: r.URL.Query().Get("category"),
+		DateFrom: r.URL.Query().Get("date_from"),
+		DateTo:   r.URL.Query().Get("date_to"),
+	})
 	if err != nil {
 		http.Error(w, "load highlights failed", http.StatusInternalServerError)
 		return

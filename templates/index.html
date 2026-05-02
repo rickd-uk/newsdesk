@@ -164,6 +164,17 @@
                 </div>
             </div>
             <div class="filter-inline-group">
+                <div class="filter-section-label">My tag</div>
+                <div class="filter-row">
+                    <select id="user-tag-filter" name="user_tag" class="filter-select" onchange="fireFeedRefresh()">
+                        <option value="">All tags</option>
+                        {{range .UserTags}}
+                        <option value="{{.}}"{{if eq $.SelectedUserTag .}} selected{{end}}>{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+            </div>
+            <div class="filter-inline-group">
                 <div class="filter-section-label">Archive</div>
                 <div class="filter-row">
                     <label class="check-label">
@@ -228,6 +239,13 @@
             <div class="highlights-panel-head">
                 <h2 id="highlights-title">Highlights</h2>
                 <button class="auth-close-btn" type="button" onclick="closeHighlightsPanel()" title="Close">&#x2715;</button>
+            </div>
+            <div class="highlights-controls">
+                <input type="search" id="highlight-search-input" class="filter-text-input highlight-search-input"
+                       placeholder="Search highlights or titles&#x2026;" autocomplete="off" oninput="debounceHighlightsRefresh()">
+                <button type="button" class="filter-action-btn" onclick="loadHighlights()">Search</button>
+                <button type="button" class="filter-action-btn" onclick="clearHighlightSearch()">Clear</button>
+                <div id="highlight-active-filters" class="highlight-active-filters"></div>
             </div>
             <div id="highlights-list" class="highlights-list"></div>
         </div>

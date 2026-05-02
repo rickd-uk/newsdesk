@@ -50,6 +50,9 @@ func main() {
 	if err := db.InitHighlightsTable(); err != nil {
 		log.Fatalf("init highlights table: %v", err)
 	}
+	if err := db.InitUserTagsTable(); err != nil {
+		log.Fatalf("init user tags table: %v", err)
+	}
 
 	tmpl, err := mustParseTemplatesFS(embeddedFiles)
 	if err != nil {

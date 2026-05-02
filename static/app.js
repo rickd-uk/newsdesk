@@ -78,8 +78,13 @@ function removeCardIfExcludedByStateFilters(card) {
     const hiddenByArchiveState =
         (filterChecked('archived_only') && !card.classList.contains('archived')) ||
         (!filterChecked('archived_only') && card.classList.contains('archived'));
+    const selectedUserTag = document.getElementById('user-tag-filter')?.value || '';
+    const hiddenByUserTag =
+        selectedUserTag && !((card.dataset.userTags || '').split(',').map(function(tag) {
+            return tag.trim();
+        }).includes(selectedUserTag));
 
-    if (hiddenByReadState || hiddenByFavoriteState || hiddenByArchiveState) {
+    if (hiddenByReadState || hiddenByFavoriteState || hiddenByArchiveState || hiddenByUserTag) {
         card.remove();
         return true;
     }
@@ -391,6 +396,116 @@ function clearArticleNote() {
     saveArticleNote();
 }
 
+// ── User tags ──
+
+function toggleArticleTags() {
+    const panel = document.getElementById('tag-panel');
+    const btn = document.getElementById('tag-toggle-btn');
+    if (!panel || !btn || btn.disabled) return;
+    const open = panel.classList.toggle('hidden') === false;
+    btn.classList.toggle('active', open || !!document.getElementById('article-tags-input')?.value.trim());
+    btn.title = open ? 'Hide tags' : 'Add tags';
+    if (open) document.getElementById('article-tags-input')?.focus();
+}
+
+function setTagStatus(text) {
+    const status = document.getElementById('tag-save-status');
+    if (status) status.textContent = text;
+}
+
+function normalizeTagString(raw) {
+    const seen = new Set();
+    return (raw || '').split(',').map(function(tag) {
+        return tag.trim().toLowerCase().replace(/\s+/g, ' ');
+    }).filter(function(tag) {
+        if (!tag || seen.has(tag)) return false;
+        seen.add(tag);
+        return true;
+    }).join(',');
+}
+
+function updateCardTags(id, tags) {
+    const card = document.getElementById('card-' + id);
+    if (!card) return;
+    card.dataset.userTags = tags || '';
+    let row = card.querySelector('.card-user-tags');
+    if (!tags) {
+        if (row) row.remove();
+        refreshUserTagFilterOptions(tags);
+        return;
+    }
+    if (!row) {
+        row = document.createElement('div');
+        row.className = 'card-user-tags';
+        const note = card.querySelector('.card-note');
+        if (note) card.insertBefore(row, note);
+        else card.appendChild(row);
+    }
+    row.innerHTML = '';
+    tags.split(',').filter(Boolean).forEach(function(tag) {
+        const pill = document.createElement('span');
+        pill.className = 'user-tag';
+        pill.textContent = tag;
+        row.appendChild(pill);
+    });
+    refreshUserTagFilterOptions(tags);
+}
+
+function refreshUserTagFilterOptions(tags) {
+    const select = document.getElementById('user-tag-filter');
+    if (!select || !tags) return;
+    const existing = new Set(Array.from(select.options).map(function(opt) { return opt.value; }));
+    tags.split(',').filter(Boolean).forEach(function(tag) {
+        if (existing.has(tag)) return;
+        const opt = document.createElement('option');
+        opt.value = tag;
+        opt.textContent = tag;
+        select.appendChild(opt);
+    });
+}
+
+function saveArticleTags() {
+    const modal = document.querySelector('.modal');
+    const id = modal && modal.dataset.articleId;
+    const input = document.getElementById('article-tags-input');
+    if (!id || !input || modal.dataset.authenticated !== '1') return;
+
+    setTagStatus('Saving...');
+    const body = new URLSearchParams();
+    body.set('tags', input.value);
+    fetch('/article/' + id + '/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+    }).then(function(resp) {
+        if (!resp.ok) throw new Error('save failed');
+        return resp.json();
+    }).then(function(data) {
+        const tags = data.tags !== undefined ? data.tags : normalizeTagString(input.value);
+        input.value = tags;
+        updateCardTags(id, tags);
+        const clearBtn = document.querySelector('#tag-panel .note-clear-btn');
+        if (clearBtn) clearBtn.disabled = !tags;
+        const btn = document.getElementById('tag-toggle-btn');
+        if (btn) {
+            btn.classList.toggle('active', !!tags);
+            btn.title = tags ? 'Edit tags' : 'Add tags';
+        }
+        setTagStatus(tags ? 'Saved' : 'Cleared');
+        setTimeout(function() { setTagStatus(''); }, 1800);
+        removeCardIfExcludedByStateFilters(document.getElementById('card-' + id));
+    }).catch(function() {
+        setTagStatus('Save failed');
+    });
+}
+
+function clearArticleTags() {
+    const input = document.getElementById('article-tags-input');
+    if (!input) return;
+    input.value = '';
+    saveArticleTags();
+}
+
 // ── Highlights ──
 
 function setupHighlightSelection() {
@@ -400,6 +515,8 @@ function setupHighlightSelection() {
 
     document.removeEventListener('selectionchange', handleArticleSelectionChange);
     document.addEventListener('selectionchange', handleArticleSelectionChange);
+    content.removeEventListener('click', handleArticleHighlightClick);
+    content.addEventListener('click', handleArticleHighlightClick);
 }
 
 function handleArticleSelectionChange() {
@@ -443,10 +560,17 @@ function hideHighlightAction() {
     if (btn) btn.hidden = true;
 }
 
+function hideHighlightDeleteAction() {
+    const btn = document.getElementById('highlight-delete-action');
+    if (btn) btn.hidden = true;
+}
+
 function clearArticleSelection() {
     hideHighlightAction();
+    hideHighlightDeleteAction();
     window.getSelection()?.removeAllRanges();
     document.removeEventListener('selectionchange', handleArticleSelectionChange);
+    document.getElementById('article-content')?.removeEventListener('click', handleArticleHighlightClick);
 }
 
 function saveSelectedHighlight() {
@@ -560,6 +684,12 @@ function textMapPositionToDom(segments, pos, preferEnd) {
     return { node: fallback.node, offset: preferEnd ? fallback.node.nodeValue.length : 0 };
 }
 
+function textMapSegmentsInRange(segments, start, end) {
+    return segments.filter(function(seg) {
+        return !seg.spacer && seg.end > start && seg.start < end;
+    });
+}
+
 function mappedOffsetForSegment(seg, normalizedOffset) {
     let seen = 0;
     let inSpace = false;
@@ -608,23 +738,62 @@ function applyHighlightText(root, snippet, id, prefix, suffix) {
     const textMap = buildHighlightTextMap(root);
     const idx = findHighlightIndex(textMap.fullText, snippet, prefix, suffix);
     if (idx < 0) return false;
-    const start = textMapPositionToDom(textMap.segments, idx, false);
-    const end = textMapPositionToDom(textMap.segments, idx + snippet.length, true);
-    if (!start || !end) return false;
+    const endIdx = idx + snippet.length;
+    const segments = textMapSegmentsInRange(textMap.segments, idx, endIdx);
+    if (!segments.length) return false;
 
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-    const mark = document.createElement('mark');
-    mark.className = 'article-highlight';
-    mark.dataset.highlightId = id;
-    try {
+    segments.slice().reverse().forEach(function(seg) {
+        const segStart = Math.max(idx, seg.start);
+        const segEnd = Math.min(endIdx, seg.end);
+        const startOffset = mappedOffsetForSegment(seg, segStart - seg.start);
+        const endOffset = mappedOffsetForSegment(seg, segEnd - seg.start);
+        if (endOffset <= startOffset) return;
+
+        const range = document.createRange();
+        range.setStart(seg.node, startOffset);
+        range.setEnd(seg.node, endOffset);
+        const mark = document.createElement('mark');
+        mark.className = 'article-highlight';
+        mark.dataset.highlightId = id;
         range.surroundContents(mark);
-    } catch (e) {
-        mark.appendChild(range.extractContents());
-        range.insertNode(mark);
-    }
+    });
     return true;
+}
+
+function handleArticleHighlightClick(e) {
+    const mark = e.target.closest('mark.article-highlight');
+    if (!mark) {
+        hideHighlightDeleteAction();
+        return;
+    }
+    e.stopPropagation();
+    window.getSelection()?.removeAllRanges();
+    hideHighlightAction();
+    showHighlightDeleteAction(mark);
+}
+
+function showHighlightDeleteAction(mark) {
+    const id = mark.dataset.highlightId;
+    if (!id) return;
+    let btn = document.getElementById('highlight-delete-action');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'highlight-delete-action';
+        btn.type = 'button';
+        btn.className = 'highlight-delete-action';
+        document.body.appendChild(btn);
+    }
+    btn.textContent = 'Remove highlight';
+    btn.dataset.highlightId = id;
+    btn.onclick = function(e) {
+        e.preventDefault();
+        deleteHighlight(id);
+        hideHighlightDeleteAction();
+    };
+    const rect = mark.getBoundingClientRect();
+    btn.style.left = Math.max(8, rect.left + rect.width / 2 - 68) + 'px';
+    btn.style.top = Math.max(8, rect.top - 42) + 'px';
+    btn.hidden = false;
 }
 
 function openHighlightsPanel() {
@@ -632,14 +801,66 @@ function openHighlightsPanel() {
     const list = document.getElementById('highlights-list');
     if (!overlay || !list) return;
     overlay.classList.add('open');
-    list.textContent = 'Loading...';
+    updateHighlightActiveFilters();
     updateBodyScrollLock();
-    fetch('/highlights').then(function(resp) {
+    loadHighlights();
+}
+
+var _highlightsRefreshTimer = null;
+
+function debounceHighlightsRefresh() {
+    clearTimeout(_highlightsRefreshTimer);
+    _highlightsRefreshTimer = setTimeout(loadHighlights, 300);
+}
+
+function buildHighlightsQuery() {
+    const params = new URLSearchParams();
+    const q = document.getElementById('highlight-search-input')?.value || '';
+    if (q.trim()) params.set('q', q.trim());
+    const site = document.getElementById('site-filter')?.value || '';
+    const category = document.getElementById('cat-filter')?.value || '';
+    const dateFrom = document.getElementById('date-from')?.value || '';
+    const dateTo = document.getElementById('date-to')?.value || '';
+    if (site) params.set('site', site);
+    if (category) params.set('category', category);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    return params;
+}
+
+function loadHighlights() {
+    const list = document.getElementById('highlights-list');
+    if (!list) return;
+    updateHighlightActiveFilters();
+    list.textContent = 'Loading...';
+    const params = buildHighlightsQuery();
+    const url = '/highlights' + (params.toString() ? '?' + params.toString() : '');
+    fetch(url).then(function(resp) {
         if (!resp.ok) throw new Error('load highlights failed');
         return resp.json();
     }).then(renderHighlightsList).catch(function() {
         list.textContent = 'Could not load highlights.';
     });
+}
+
+function clearHighlightSearch() {
+    const input = document.getElementById('highlight-search-input');
+    if (input) input.value = '';
+    loadHighlights();
+}
+
+function updateHighlightActiveFilters() {
+    const el = document.getElementById('highlight-active-filters');
+    if (!el) return;
+    const filters = [];
+    const site = document.getElementById('site-filter')?.value || '';
+    const category = document.getElementById('cat-filter')?.value || '';
+    const dateFrom = document.getElementById('date-from')?.value || '';
+    const dateTo = document.getElementById('date-to')?.value || '';
+    if (site) filters.push('Site: ' + site);
+    if (category) filters.push('Category: ' + category);
+    if (dateFrom || dateTo) filters.push('Date: ' + (dateFrom || '...') + ' to ' + (dateTo || '...'));
+    el.textContent = filters.length ? filters.join('  |  ') : 'Showing all highlighted snippets';
 }
 
 function closeHighlightsPanel() {
@@ -656,7 +877,7 @@ function renderHighlightsList(items) {
     if (!list) return;
     list.innerHTML = '';
     if (!items || !items.length) {
-        list.textContent = 'No highlights yet.';
+        list.textContent = 'No matching highlights.';
         return;
     }
     items.forEach(function(item) {
@@ -702,6 +923,7 @@ function deleteHighlight(id, row) {
             if (el.dataset.id === String(id)) el.remove();
         });
         applySavedHighlights();
+        hideHighlightDeleteAction();
     });
 }
 
@@ -822,6 +1044,7 @@ function updateFilterBadge() {
         document.getElementById('site-filter')?.value,
         document.getElementById('cat-filter')?.value,
         document.getElementById('author-input')?.value,
+        document.getElementById('user-tag-filter')?.value,
         document.querySelector('[name="date_from"]')?.value,
         document.querySelector('[name="date_to"]')?.value,
     ].filter(Boolean).length;
